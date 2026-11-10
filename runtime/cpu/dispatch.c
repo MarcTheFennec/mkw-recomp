@@ -47,8 +47,7 @@ void rt_fatal(const char *fmt, ...) {
     rt_vlogf(fmt, ap);
     rt_log_raw("\n", 1);
     va_end(ap);
-    fflush(stdout);
-    fflush(stderr);
+    rt_log_flush();
     _Exit(70);
 }
 

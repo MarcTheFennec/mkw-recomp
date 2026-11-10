@@ -296,6 +296,8 @@ int plat_file_set_readonly(const char *path, int on);     // sets or clears the 
 typedef struct PlatAppend PlatAppend;
 PlatAppend *plat_append_open(const char *path);           // creates or truncates path; NULL on failure
 int plat_append_write(PlatAppend *f, const void *data, size_t n);   // 1 when all n bytes landed
+void plat_append_sync(PlatAppend *f);                     // fsync / FlushFileBuffers on the append handle
+void *plat_mmap_rw_file(const char *path, size_t size);   // shared read-write mapping of path (created and sized to size)
 // Calls cb(name, ctx) for each file in dir whose name ends in ext (".in"); name has no directory part. cb returns 0 to
 // stop. Returns 0 when dir cannot be listed.
 int plat_file_list(const char *dir, const char *ext, int (*cb)(const char *name, void *ctx), void *ctx);

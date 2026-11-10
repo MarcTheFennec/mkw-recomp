@@ -286,18 +286,20 @@ static void fault_handler(int sig, siginfo_t *si, void *uc) {
         const char *base = at.dli_fname ? strrchr(at.dli_fname, '/') : NULL;
         ours_game = base && !strcmp(base + 1, "mkwgame.so");
     }
-    if (crash_fn && (!in_module || ours_exe || ours_game)) {
+    if (crash_fn && (sig == SIGABRT || !in_module || ours_exe || ours_game)) {
         PlatCrash c = {sig == SIGSEGV ? "access violation" : sig == SIGBUS ? "bus error"
+                       : sig == SIGABRT ? "abort"
                        : sig == SIGILL ? "illegal instruction" : "arithmetic exception",
                        (uint32_t)sig, rip, in_module ? rip - (uintptr_t)at.dli_fbase : rip, -1, 0,
-                       !in_module ? "no module" : ours_exe ? "mkw" : "mkwgame", 0};
+                       !in_module ? "no module" : ours_exe ? "mkw" : ours_game ? "mkwgame"
+                       : (at.dli_fname ? at.dli_fname : "external"), 0};
         uintptr_t sp = (uintptr_t)u->uc_mcontext.gregs[REG_RSP];   // a wild call left its return address there
         if (!in_module && sp && !(sp & 7) && plat_mem_readable(sp, 8)) c.ret = *(const uintptr_t *)sp;
         if (sig == SIGSEGV || sig == SIGBUS)
             c.access = (err & 16) ? 8 : (err & 2) ? 1 : 0, c.addr = (uint64_t)(uintptr_t)si->si_addr;
         crash_fn(&c);
     } else {
-        // Outside this executable (a driver or system library): no crash report, but say where before dying.
+        // Outside this executable (a driver or system library): log to both stderr and crash_fn before dying.
         Dl_info lib = {0};
         dladdr((void *)rip, &lib);
         char line[512];
@@ -308,6 +310,15 @@ static void fault_handler(int sig, siginfo_t *si, void *uc) {
         if (n > 0) (void)!write(2, line, (size_t)n < sizeof line ? (size_t)n : sizeof line - 1);
         void *frames[32];
         backtrace_symbols_fd(frames, backtrace(frames, 32), 2);   // the host call into the library
+        if (crash_fn) {
+            PlatCrash c = {sig == SIGSEGV ? "access violation" : sig == SIGBUS ? "bus error"
+                           : sig == SIGILL ? "illegal instruction" : "arithmetic exception",
+                           (uint32_t)sig, rip, rip - (uintptr_t)lib.dli_fbase, -1, 0,
+                           lib.dli_fname ? lib.dli_fname : "external", 0};
+            if (sig == SIGSEGV || sig == SIGBUS)
+                c.access = (err & 16) ? 8 : (err & 2) ? 1 : 0, c.addr = (uint64_t)(uintptr_t)si->si_addr;
+            crash_fn(&c);
+        }
     }
     signal(sig, SIG_DFL);   // returns into the faulting instruction, which faults again with the default action
 }
@@ -320,6 +331,7 @@ static void fault_install(void) {
     struct sigaction sa = {.sa_sigaction = fault_handler, .sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER};
     sigemptyset(&sa.sa_mask);
     sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGABRT, &sa, NULL);
     sigaction(SIGBUS, &sa, NULL);
     sigaction(SIGILL, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);

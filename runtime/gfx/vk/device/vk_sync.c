@@ -673,7 +673,9 @@ void vk_sync_part_wait(uint64_t value) {
     if (!c || !part_sem) return;
     VkSemaphoreWaitInfo wi = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO, .semaphoreCount = 1,
                               .pSemaphores = &part_sem, .pValues = &value};
-    if (vkWaitSemaphores(c->device, &wi, UINT64_MAX) != VK_SUCCESS) rt_fatal("vk: wait for part %llu failed", (unsigned long long)value);
+    VkResult r = vkWaitSemaphores(c->device, &wi, UINT64_MAX);
+    if (r == VK_ERROR_DEVICE_LOST) vk_exec_recent_log();
+    if (r != VK_SUCCESS) rt_fatal("vk: wait for part %llu failed (%d)", (unsigned long long)value, (int)r);
 }
 
 void vk_sync_finish(void) {

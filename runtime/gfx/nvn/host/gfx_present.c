@@ -537,7 +537,12 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     if (!g_capture && turbo_drop_present(kern_now_ns())) goto out;   // turbo: the window shows at most 60 a second
 
     unsigned slot = g_frame % FRAMES;
-    if (vkWaitForFences(c->device, 1, &g_fence[slot], VK_TRUE, 5000000000ull) != VK_SUCCESS) {
+    VkResult wr = vkWaitForFences(c->device, 1, &g_fence[slot], VK_TRUE, 5000000000ull);
+    if (wr == VK_ERROR_DEVICE_LOST) {
+        vk_exec_recent_log();
+        rt_fatal("gfx: present fence wait failed (VK_ERROR_DEVICE_LOST)");
+    }
+    if (wr != VK_SUCCESS) {
         rt_log("gfx: present fence wait timed out");
         goto out;
     }
@@ -664,12 +669,19 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
         g_flip_on = 1;
         g_flip_idx = idx;
         if (!defer) flip_locked();
+    } else if (r == VK_ERROR_DEVICE_LOST) {
+        vk_exec_recent_log();
+        rt_fatal("gfx: present submit failed (VK_ERROR_DEVICE_LOST)");
     } else {
         rt_log("gfx: present submit failed (%d)", (int)r);
     }
     g_frame++;
     if (cap) {
-        vkWaitForFences(c->device, 1, &g_fence[slot], VK_TRUE, 5000000000ull);
+        VkResult cr = vkWaitForFences(c->device, 1, &g_fence[slot], VK_TRUE, 5000000000ull);
+        if (cr == VK_ERROR_DEVICE_LOST) {
+            vk_exec_recent_log();
+            rt_fatal("gfx: capture fence wait failed (VK_ERROR_DEVICE_LOST)");
+        }
         vmaInvalidateAllocation(c->vma, g_cap_alloc, 0, VK_WHOLE_SIZE);
         g_cap_w = (int)g_sc_ext.width;
         g_cap_h = (int)g_sc_ext.height;

@@ -114,6 +114,34 @@ int plat_append_write(PlatAppend *f, const void *data, size_t n) {
     return WriteFile((HANDLE)f, data, (DWORD)n, &put, &o) && put == n;
 }
 
+void plat_append_sync(PlatAppend *f) {
+    if (f) FlushFileBuffers((HANDLE)f);
+}
+
+void *plat_mmap_rw_file(const char *path, size_t size) {
+    if (!path || !size) return NULL;
+    char dir[WPATH];
+    if (snprintf(dir, sizeof dir, "%s", path) < (int)sizeof dir) {
+        char *s1 = strrchr(dir, '/'), *s2 = strrchr(dir, '\\');
+        char *slash = s1 && (!s2 || s1 > s2) ? s1 : s2;
+        if (slash && slash != dir) {
+            *slash = 0;
+            plat_file_mkdir_p(dir);
+        }
+    }
+    wchar_t w[WPATH];
+    if (!widen(path, w, WPATH)) return NULL;
+    HANDLE h = CreateFileW(w, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return NULL;
+    HANDLE map = CreateFileMappingW(h, NULL, PAGE_READWRITE, (DWORD)((uint64_t)size >> 32), (DWORD)size, NULL);
+    CloseHandle(h);
+    if (!map) return NULL;
+    void *v = MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, size);
+    CloseHandle(map);
+    return v;
+}
+
 int plat_file_replace(const char *from, const char *to) {
     wchar_t a[WPATH], b[WPATH];
     if (!widen(from, a, WPATH) || !widen(to, b, WPATH)) return 0;

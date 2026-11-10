@@ -34,6 +34,7 @@
 #include "platform/platform.h"
 #include "sha256.h"
 #include "ui/launcher/launcher.h"
+#include "vk.h"
 
 #define MAX_MODULES 16
 
@@ -101,6 +102,13 @@ const char *rt_log_path(void) {
     return __atomic_load_n(&g_log_state, __ATOMIC_ACQUIRE) == LOG_FILE ? g_log_path : NULL;
 }
 
+void rt_log_flush(void) {
+    fflush(stdout);
+    fflush(stderr);
+    if (__atomic_load_n(&g_log_state, __ATOMIC_ACQUIRE) == LOG_FILE && g_log_file)
+        plat_append_sync(g_log_file);
+}
+
 // Opens the log file for a game run (game = 1) and writes the buffered lines to it; anything else drops them. Runs on
 // the main thread before the boot starts other threads.
 static void log_open(int game) {
@@ -125,6 +133,7 @@ static void log_open(int game) {
     }
     if (!g_log_file) {
         __atomic_store_n(&g_log_state, LOG_OFF, __ATOMIC_RELEASE);
+        if (game) vk_crumbs_last_check();
         return;
     }
     size_t n = __atomic_load_n(&g_log_early_n, __ATOMIC_RELAXED);
@@ -133,6 +142,7 @@ static void log_open(int game) {
     g_log_bytes = n;
     __atomic_store_n(&g_log_state, LOG_FILE, __ATOMIC_RELEASE);
     rt_log("log: %s", g_log_path);
+    if (game) vk_crumbs_last_check();
 }
 
 static void parse_trace(void) {
@@ -250,7 +260,8 @@ static void crash_handler(const PlatCrash *x) {
     } else {
         rt_logf("  not on a guest thread\n");
     }
-    fflush(stderr);
+    vk_crumbs_dump_active();
+    rt_log_flush();
     plat_exit(71);
 }
 

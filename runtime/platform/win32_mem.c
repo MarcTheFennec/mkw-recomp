@@ -142,9 +142,31 @@ static LONG CALLBACK crash_veh(EXCEPTION_POINTERS *ep) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+static LONG WINAPI crash_uef(EXCEPTION_POINTERS *ep) {
+    DWORD code = ep->ExceptionRecord->ExceptionCode;
+    const char *what = code == EXCEPTION_ACCESS_VIOLATION ? "access violation"
+                     : code == EXCEPTION_ILLEGAL_INSTRUCTION ? "illegal instruction"
+                     : code == EXCEPTION_INT_DIVIDE_BY_ZERO ? "integer division by zero"
+                     : code == EXCEPTION_PRIV_INSTRUCTION ? "privileged instruction"
+                     : code == EXCEPTION_STACK_OVERFLOW ? "stack overflow"
+                     : code == EXCEPTION_IN_PAGE_ERROR ? "in-page error" : "unhandled exception";
+    uintptr_t rip = (uintptr_t)ep->ContextRecord->Rip;
+    HMODULE at = NULL;
+    int in_module = GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                       (LPCWSTR)rip, &at);
+    MODULEINFO mi = {0};
+    if (in_module) GetModuleInformation(GetCurrentProcess(), at, &mi, sizeof mi);
+    PlatCrash c = {what, (uint32_t)code, rip, in_module ? rip - (uintptr_t)mi.lpBaseOfDll : rip, -1, 0, "external", 0};
+    if (code == EXCEPTION_ACCESS_VIOLATION && ep->ExceptionRecord->NumberParameters >= 2)
+        c.access = (int)ep->ExceptionRecord->ExceptionInformation[0], c.addr = ep->ExceptionRecord->ExceptionInformation[1];
+    if (crash_fn) crash_fn(&c);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 void plat_crash_hook(void (*fn)(const PlatCrash *c)) {
     crash_fn = fn;
     AddVectoredExceptionHandler(0, crash_veh);
+    SetUnhandledExceptionFilter(crash_uef);
 }
 
 // A fresh process gets a fresh layout: Windows places DLLs, heaps and thread stacks at random addresses. The parent

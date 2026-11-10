@@ -69,8 +69,13 @@ static void retire(VkCtx *c, int wait_all) {
     int k = 0;
     for (; k < ninflight; k++) {
         Batch *b = &inflight[k];
-        if (wait_all) vkWaitForFences(c->device, 1, &b->fence, VK_TRUE, UINT64_MAX);
-        else if (vkGetFenceStatus(c->device, b->fence) != VK_SUCCESS) break;
+        VkResult r = wait_all ? vkWaitForFences(c->device, 1, &b->fence, VK_TRUE, UINT64_MAX)
+                              : vkGetFenceStatus(c->device, b->fence);
+        if (r == VK_ERROR_DEVICE_LOST) {
+            vk_exec_recent_log();
+            rt_fatal("vk: upload fence failed (VK_ERROR_DEVICE_LOST)");
+        }
+        if (r != VK_SUCCESS) break;
         free_staging(c, b);
         vk_uptime_done(b->ut, b->seq, b->stg_bytes, b->texels, b->calls);
         done_seq = b->seq;
@@ -331,7 +336,11 @@ uint64_t vk_upload_flush(int wait) {
     }
     if (c && wait) {
         while (ninflight && done_seq < seq) {
-            vkWaitForFences(c->device, 1, &inflight[0].fence, VK_TRUE, UINT64_MAX);
+            VkResult r = vkWaitForFences(c->device, 1, &inflight[0].fence, VK_TRUE, UINT64_MAX);
+            if (r == VK_ERROR_DEVICE_LOST) {
+                vk_exec_recent_log();
+                rt_fatal("vk: upload fence wait failed (VK_ERROR_DEVICE_LOST)");
+            }
             retire(c, 0);
         }
     }

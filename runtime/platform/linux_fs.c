@@ -128,6 +128,33 @@ int plat_append_write(PlatAppend *f, const void *data, size_t n) {
     return k == (ssize_t)n;
 }
 
+void plat_append_sync(PlatAppend *f) {
+    if (!f) return;
+    int fd = (int)(intptr_t)f - 1;
+    fsync(fd);
+}
+
+void *plat_mmap_rw_file(const char *path, size_t size) {
+    if (!path || !size) return NULL;
+    char dir[PATH_MAX];
+    if (snprintf(dir, sizeof dir, "%s", path) < (int)sizeof dir) {
+        char *slash = strrchr(dir, '/');
+        if (slash && slash != dir) {
+            *slash = 0;
+            plat_file_mkdir_p(dir);
+        }
+    }
+    int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+    if (fd < 0) return NULL;
+    if (ftruncate(fd, (off_t)size) != 0) {
+        close(fd);
+        return NULL;
+    }
+    void *v = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    return v == MAP_FAILED ? NULL : v;
+}
+
 // Flushes the directory holding path, so a rename into it survives a crash.
 static void sync_dir_of(const char *path) {
     char dir[PATH_MAX];

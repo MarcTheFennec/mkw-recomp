@@ -299,8 +299,9 @@ void rt_frame_presented(const tex_t *t, uint64_t n) {
     fflush(stderr);
     fs_save_flush();
     vk_pipeline_save();   // no-op without the Vulkan back end
+    vk_crumbs_clear_active();
     prof_write();
-    fflush(stderr);
+    rt_log_flush();
     plat_exit(0);
 }
 

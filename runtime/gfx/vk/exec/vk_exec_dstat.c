@@ -56,6 +56,7 @@ static void fault_log(void) {
 }
 
 void vk_exec_recent_log(void) {
+    vk_crumbs_dump_active();
     fault_log();
     vk_crumbs_report();
     uint32_t n = __atomic_load_n(&recent_at, __ATOMIC_ACQUIRE), from = n > RECENT_N ? n - RECENT_N : 0;
@@ -67,6 +68,7 @@ void vk_exec_recent_log(void) {
             for (int k = 0; k < 32; k++) sprintf(b + 2 * k, "%02x", recent[i % RECENT_N].key[1][k]);
         rt_log("  %s %s", a, b);
     }
+    rt_log_flush();
 }
 
 // The bound state a draw reads, compared with the previous draw's (MKW_BIND_STATS only).
