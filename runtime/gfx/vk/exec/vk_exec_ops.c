@@ -272,6 +272,7 @@ static void op_dispatch(VkExec *ex, const p_dispatch *d) {
     vk_ubo_watch(ex, NVN_STAGE_CS);   // MKW_UBO_WATCH (diag/vk_ubo_watch.c)
     bind_pipeline(ex, VK_PIPELINE_BIND_POINT_COMPUTE, p);
     recent_note(cs, NULL);
+    vk_crumbs_set_state((uint64_t)(uintptr_t)p, gfx_shader_key(cs), NULL, "Dispatch", 0);
     c0_dim[0] = (uint32_t)d->x, c0_dim[1] = (uint32_t)d->y, c0_dim[2] = (uint32_t)d->z, c0_cs = cs;
     bind_resources(ex, info);
     int pt = vk_pt_enabled();
@@ -315,6 +316,7 @@ static void op_dispatch_ind(VkExec *ex, const p_dispatch_ind *d) {
     VK_MEM_USE(ip);
     bind_pipeline(ex, VK_PIPELINE_BIND_POINT_COMPUTE, p);
     recent_note(cs, NULL);
+    vk_crumbs_set_state((uint64_t)(uintptr_t)p, gfx_shader_key(cs), NULL, "DispatchIndirect", 0);
     c0_dim[0] = c0_dim[1] = c0_dim[2] = 0, c0_cs = cs;
     B.c0_valid[2] = 0;   // a fresh c0 range: the copy below must not change one an earlier dispatch reads
     bind_resources(ex, info);
@@ -376,6 +378,12 @@ static void bind_handles(uint64_t *dst, int cap, const p_bind_handles *b) {
 #define MESH_CS_PRIMS 64
 
 static void op_draw_mesh_cs(VkExec *ex, const p_draw_mesh *d) {
+    static int skip_mc = -1;
+    if (skip_mc < 0) {
+        skip_mc = rt_knob("SKIP_MESH_COMPUTE", "0");
+        if (skip_mc) rt_log("vk: mesh compute dispatches skipped (MKW_SKIP_MESH_COMPUTE)");
+    }
+    if (RT_KNOB_ON(skip_mc)) return;
     if (d->count <= 0) return;
     int present;
     const GfxShader *msh = NULL, *first = mesh_stages(ex, &msh, &present);
@@ -389,14 +397,22 @@ static void op_draw_mesh_cs(VkExec *ex, const p_draw_mesh *d) {
     VkPipeline cp = task ? vk_mesh_cs_compact_pipeline(&cl) : VK_NULL_HANDLE;
     if (!mp || !mi || (tcs && (!tp || !ti || !cp)))
         return warn_once(W_PIPELINE, "a task/mesh compute pipeline could not be created: those draws are skipped");
-    // room for every mesh workgroup the tasks could ask for; the compaction launches only those they did
-    uint32_t groups = task ? (uint32_t)d->count * MESH_CS_PER_TASK : (uint32_t)d->count;
+    // room for every mesh workgroup the tasks could ask for; the compaction launches only those they did.
+    // Clamp emitted vertex and primitive capacity to a single mesh scratch chunk (64 MiB).
+    uint32_t max_tasks = (uint32_t)d->count;
+    uint32_t max_chunk_groups = (uint32_t)((64ull << 20) / (32ull * MESH_CS_VWORDS * 4ull));
+    uint32_t groups = task ? max_tasks * MESH_CS_PER_TASK : max_tasks;
+    if (groups > max_chunk_groups) {
+        groups = max_chunk_groups;
+        if (task && max_tasks > groups / MESH_CS_PER_TASK) max_tasks = groups / MESH_CS_PER_TASK;
+    }
+    if (!groups || (task && !max_tasks)) return;
     uint64_t nidx = (uint64_t)groups * MESH_CS_PRIMS * 3;
-    struct { VkDeviceAddress trec, mvo, mto, map; uint32_t has_task, pad; } pc = {0, 0, 0, 0, task != NULL, 0};
+    struct { VkDeviceAddress trec, mvo, mto, map; uint32_t has_task, max_groups; } pc = {0, 0, 0, 0, task != NULL, groups};
     VkBuffer tb, vb, ib, mb, ab = VK_NULL_HANDLE;
     VkDeviceSize to, vo, io, mo, ao = 0;
     VkDeviceAddress aa = 0;
-    if (!vk_mesh_cs_alloc(ex->fence, task ? (VkDeviceSize)d->count * MESH_CS_TASK_REC * 4 : 256, &tb, &to, &pc.trec) ||
+    if (!vk_mesh_cs_alloc(ex->fence, task ? (VkDeviceSize)max_tasks * MESH_CS_TASK_REC * 4 : 256, &tb, &to, &pc.trec) ||
         !vk_mesh_cs_alloc(ex->fence, (VkDeviceSize)groups * 32 * MESH_CS_VWORDS * 4, &vb, &vo, &pc.mvo) ||
         !vk_mesh_cs_alloc(ex->fence, nidx * 4, &ib, &io, &pc.mto) ||
         !vk_mesh_cs_alloc(ex->fence, (VkDeviceSize)groups * 4, &mb, &mo, &pc.map) ||
@@ -409,20 +425,24 @@ static void op_draw_mesh_cs(VkExec *ex, const p_draw_mesh *d) {
     }
     cb_res(ex);
     dummies_init();
+    vk_crumbs_set_state((uint64_t)(uintptr_t)mp, tcs ? gfx_shader_key(tcs) : gfx_shader_key(mcs),
+                        tcs ? gfx_shader_key(mcs) : NULL, "DrawMeshTasks (MKW_MESH_COMPUTE)", 1);
     dispatch_barrier(ex);   // ends the pass; earlier writes are visible to the passes
     if (task) {
+        pc.max_groups = max_tasks;
         bind_pipeline(ex, VK_PIPELINE_BIND_POINT_COMPUTE, tp);
         bind_resources(ex, ti);
         vkCmdPushConstants(ex->cb, ti->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
-        vkCmdDispatch(ex->cb, (uint32_t)d->count, 1, 1);
+        vkCmdDispatch(ex->cb, max_tasks, 1, 1);
         ex->recorded += 2;
         vk_exec_barrier(ex);
-        struct { VkDeviceAddress trec, map, args; uint32_t tasks, pad; } cpc = {pc.trec, pc.map, aa, (uint32_t)d->count, 0};
+        struct { VkDeviceAddress trec, map, args; uint32_t tasks, pad; } cpc = {pc.trec, pc.map, aa, max_tasks, 0};
         bind_pipeline(ex, VK_PIPELINE_BIND_POINT_COMPUTE, cp);
         vkCmdPushConstants(ex->cb, cl, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof cpc, &cpc);
         vkCmdDispatch(ex->cb, 1, 1, 1);
         ex->recorded += 2;
         vk_exec_barrier(ex);   // the map and the indirect arguments
+        pc.max_groups = groups;
     }
     bind_pipeline(ex, VK_PIPELINE_BIND_POINT_COMPUTE, mp);
     bind_resources(ex, mi);
@@ -431,8 +451,29 @@ static void op_draw_mesh_cs(VkExec *ex, const p_draw_mesh *d) {
     else vkCmdDispatch(ex->cb, groups, 1, 1);
     ex->recorded += 2;
     ex->last_dispatch = ex->recorded;
-    vk_exec_barrier(ex);   // the vertices and triangles are read as vertex and index buffers
-    if (nidx > UINT32_MAX || !prepare_draw_ex(ex, NVN_DRAW_PRIMITIVE_TRIANGLES, (int32_t)nidx, 0, 2)) return;
+    vk_exec_barrier(ex);   // ends the pass if any; full barrier
+    VkMemoryBarrier2 mb2 = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+        .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+                        VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT |
+                        VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT,
+        .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT |
+                         VK_ACCESS_2_INDEX_READ_BIT |
+                         VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
+                         VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+    };
+    VkDependencyInfo dep = {
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .memoryBarrierCount = 1,
+        .pMemoryBarriers = &mb2,
+    };
+    vkCmdPipelineBarrier2(ex->cb, &dep);
+    if (nidx > UINT32_MAX || !prepare_draw_ex(ex, NVN_DRAW_PRIMITIVE_TRIANGLES, (int32_t)nidx, 0, 2)) {
+        vk_crumbs_set_mesh_compute(0);
+        return;
+    }
     vk_exec_frame.draws++;
     VkDeviceSize stride = MESH_CS_VWORDS * 4, size = (VkDeviceSize)groups * 32 * stride;
     vkCmdBindVertexBuffers2(ex->cb, 0, 1, &vb, &vo, &size, vk_pipeline_vertex_input_dynamic() ? NULL : &stride);
@@ -440,6 +481,7 @@ static void op_draw_mesh_cs(VkExec *ex, const p_draw_mesh *d) {
     vkCmdBindIndexBuffer(ex->cb, ib, io, VK_INDEX_TYPE_UINT32);
     if (task) vkCmdDrawIndexedIndirect(ex->cb, ab, ao + 12, 1, 20);   // args[3..7] (mesh_compact.comp)
     else vkCmdDrawIndexed(ex->cb, (uint32_t)nidx, 1, 0, 0, 0);
+    vk_crumbs_set_mesh_compute(0);
     ex->recorded += 3;
 }
 

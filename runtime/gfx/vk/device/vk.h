@@ -268,6 +268,7 @@ int vk_sparse_create(const VkImageCreateInfo *ci, const nvn_texdesc *d, uint64_t
 uint64_t vk_sparse_destroy(VkImage img);   // the submission its binds are done by (0: none)
 int vk_sparse_is(VkImage img);   // 1: img is a sparse image made by vk_sparse_create
 void vk_sparse_remap(uint64_t addr, uint64_t size);
+void vk_texture_remap_virtual(uint64_t lo, uint64_t size);   // routes MapVirtual to non-sparse VMA-backed fallback images
 // A copy or a pass wrote the region (w == 0: the whole level) of img: counted when img is sparse.
 void vk_sparse_written(VkImage img, uint32_t level, uint32_t layer0, uint32_t layers, int32_t x, int32_t y, uint32_t w,
                        uint32_t h);
@@ -390,6 +391,12 @@ uint32_t vk_crumb_begin(VkCommandBuffer cb, int kind, uint32_t w, uint32_t h, ui
                         const VkFormat *color, VkFormat depth);
 void vk_crumb_end(VkCommandBuffer cb, int kind, uint32_t id);
 void vk_crumbs_report(void);     // at a device loss (vk_exec_recent_log), once
+void vk_crumbs_last_check(void); // startup: logs [host] last run crashed at: <pass/shader/command> from last_crumb.bin and clears it
+void vk_crumbs_set_pass(uint32_t w, uint32_t h, uint32_t d, uint32_t ncolor, const VkFormat *color, VkFormat depth);
+void vk_crumbs_set_state(uint64_t pipe_hash, const uint8_t *sa, const uint8_t *sb, const char *cmd, int in_mesh_compute);
+void vk_crumbs_set_mesh_compute(int in_mesh_compute);
+void vk_crumbs_dump_active(void);
+void vk_crumbs_clear_active(void);
 VkFormat vk_texture_view_format(const VkTexImage *img, VkFormat want);   // a target view's format the image allows
 const VkTexImage *vk_texture_get(const tex_t *t);   // created and made current; NULL for BUFFER or unmapped formats
 // A texture slot; a slot whose texture was finalized follows the live texture at the same storage (hle_nvn.c).

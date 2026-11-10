@@ -1,7 +1,7 @@
 """SM86 -> GLSL: the declarations before main() (version, extensions, helper functions, inputs and outputs,
 resource bindings and their reflection) and the task/mesh wrappers around the translated body."""
 
-from glsl.common import HMMA_FN, LDSM_FN, LOP3_FN, MOVM_FN, NMINMAX_FN, PRMT_FN, SHFL_FN
+from glsl.common import HMMA_FN, LDSM_FN, LOP3_FN, MOVM_FN, NMINMAX_FN, PRMT_FN, SG32_HELPERS, SHFL_FN
 from glsl.thread import ThreadOps
 
 
@@ -44,6 +44,7 @@ def declarations(b, stage: str, shape: tuple[int, int, int, int] | None) -> list
         ]
         if b.uses_arith:
             head.append("#extension GL_KHR_shader_subgroup_arithmetic : require")  # fmt: skip
+        head.append(SG32_HELPERS)
     if stage == "cs":
         # Workgroup and shared memory size from the program's control section (compute_shape). They were
         # specialization constants that no back end set: every dispatch ran 1x1x1 groups until 31/10/2026.
@@ -144,24 +145,26 @@ TASK_MAIN = """void main() {
 # The outputs start at zero: shared memory keeps the previous workgroup's bytes on AMD, and an index or vertex the
 # program leaves unwritten drew long triangles across the shadow map (Hookshot ae4fb30, RX 7700S; GPL: the idea only).
 MESH_GENERICS = 16
+MESH_VERTS = 32
 MESH_ZERO = """    for (uint k = gl_LocalInvocationIndex; k < MV_WORDS; k += 32u) mv[k] = 0u;
     for (uint k = gl_LocalInvocationIndex; k < MESH_PRIMS * 3u; k += 32u) mib[k] = 0u;
 """
 MESH_MAIN = (
     """void main() {
-    if (gl_LocalInvocationIndex == 0u) mprims = 0u;
+    uint virtual_warp_id = gl_LocalInvocationIndex >> 5u, virtual_lane_id = gl_LocalInvocationIndex & 31u;
+    if (virtual_warp_id == 0u && virtual_lane_id == 0u) mprims = 0u;
 """
     + MESH_ZERO
     + """    barrier();
-    sm_main();
+    if (virtual_warp_id == 0u) sm_main();
     barrier();
-    uint np = min(mprims, MESH_PRIMS), v = gl_LocalInvocationIndex;
+    uint np = min(mprims, MESH_PRIMS), v = virtual_lane_id;
     SetMeshOutputsEXT(32u, np);
     gl_MeshVerticesEXT[v].gl_Position = uintBitsToFloat(uvec4(mv[v], mv[32u + v], mv[64u + v], mv[96u + v]));
 """
     + "".join(f"    out_attr{g}[v] = uintBitsToFloat(uvec4(mv[{(4 + 4 * g) * 32}u + v], mv[{(5 + 4 * g) * 32}u + v], "
               f"mv[{(6 + 4 * g) * 32}u + v], mv[{(7 + 4 * g) * 32}u + v]));\n" for g in range(MESH_GENERICS))
-    + """    for (uint p = v; p < np; p += 32u) gl_PrimitiveTriangleIndicesEXT[p] = uvec3(mib[3u * p], mib[3u * p + 1u], mib[3u * p + 2u]);
+    + """    for (uint p = v; p < np; p += 32u) gl_PrimitiveTriangleIndicesEXT[p] = min(uvec3(mib[3u * p], mib[3u * p + 1u], mib[3u * p + 2u]), uvec3(31u));
 }
 """
 )
@@ -171,7 +174,7 @@ def mesh_head(head: list[str]) -> list[str]:
     out = [head[0], "#extension GL_EXT_mesh_shader : require", *head[1:]]
     out += ["layout(local_size_x = 32) in;", "layout(triangles, max_vertices = 32, max_primitives = 64) out;",
             "#define WG_INDEX gl_WorkGroupID.x",
-            "const uint MESH_PRIMS = 64u;", f"const uint MV_WORDS = {(4 + 4 * MESH_GENERICS) * 32}u;",
+            "const uint MESH_VERTS = 32u;", "const uint MESH_PRIMS = 64u;", f"const uint MV_WORDS = {(4 + 4 * MESH_GENERICS) * 32}u;",
             f"taskPayloadSharedEXT uint tp[{ThreadOps.TASK_WORDS}];", "shared uint mv[MV_WORDS];",
             "shared uint mib[MESH_PRIMS * 3u];", "shared uint mprims;"]  # fmt: skip
     out = [x for x in out if not x.startswith("layout(location") and "gl_ClipDistance" not in x]
@@ -201,7 +204,7 @@ CS_BUFFERS = [
     "#extension GL_EXT_buffer_reference : require",
     "#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require",
     "layout(buffer_reference, std430, buffer_reference_align = 4) buffer U32s { uint d[]; };",
-    "layout(push_constant) uniform MeshPass { U32s trec, mvo, mto, map; uint has_task; } mp;",
+    "layout(push_constant) uniform MeshPass { U32s trec, mvo, mto, map; uint has_task, max_groups; } mp;",
     "#define trec mp.trec",
     "#define mvo mp.mvo",
     "#define mto mp.mto",
@@ -209,13 +212,15 @@ CS_BUFFERS = [
 ]
 
 TASK_MAIN_CS = f"""void main() {{
-    if (gl_LocalInvocationIndex == 0u) task_count = 0u;
+    uint virtual_warp_id = gl_LocalInvocationIndex >> 5u, virtual_lane_id = gl_LocalInvocationIndex & 31u;
+    if (virtual_warp_id == 0u && virtual_lane_id == 0u) task_count = 0u;
     barrier();
-    sm_main();
+    if (virtual_warp_id == 0u) sm_main();
     barrier();
+    if (mp.max_groups != 0u && gl_WorkGroupID.x >= mp.max_groups) return;
     uint base = gl_WorkGroupID.x * {TASK_REC}u;
-    for (uint k = gl_LocalInvocationIndex; k < {TASK_REC - 1}u; k += 32u) trec.d[base + k] = tp[k];
-    if (gl_LocalInvocationIndex == 0u) trec.d[base + {TASK_REC - 1}u] = min(task_count, {MESH_PER_TASK}u);
+    for (uint k = virtual_lane_id; k < {TASK_REC - 1}u; k += 32u) trec.d[base + k] = tp[k];
+    if (virtual_warp_id == 0u && virtual_lane_id == 0u) trec.d[base + {TASK_REC - 1}u] = min(task_count, {MESH_PER_TASK}u);
 }}
 """
 
@@ -223,17 +228,22 @@ MESH_MAIN_CS = (
     f"""void main() {{
     // with a task: the packed workgroup's task and index (runtime/shaders/mesh_compact.comp), launched only as many
     // as the tasks asked for
-    uint g = gl_WorkGroupID.x, t = HAS_TASK ? mmap.d[g] >> 5 : 0u, v = gl_LocalInvocationIndex;
-    bool live = true;
-    if (v == 0u) mprims = 0u;
-{MESH_ZERO}    if (HAS_TASK) for (uint k = v; k < {TASK_REC - 1}u; k += 32u) tp[k] = trec.d[t * {TASK_REC}u + k];
+    uint virtual_warp_id = gl_LocalInvocationIndex >> 5u, virtual_lane_id = gl_LocalInvocationIndex & 31u;
+    uint g = gl_WorkGroupID.x, v = virtual_lane_id;
+    bool in_bounds = (mp.max_groups == 0u || g < mp.max_groups);
+    uint t = (HAS_TASK && in_bounds) ? mmap.d[g] >> 5 : 0u;
+    bool live = in_bounds && (virtual_warp_id == 0u);
+    if (virtual_warp_id == 0u && v == 0u) mprims = 0u;
+{MESH_ZERO}    if (HAS_TASK && in_bounds) for (uint k = v; k < {TASK_REC - 1}u; k += 32u) tp[k] = trec.d[t * {TASK_REC}u + k];
     barrier();
     if (live) sm_main();
     barrier();
-    uint np = live ? min(mprims, MESH_PRIMS) : 0u, vb = (g * 32u + v) * {MESH_VWORDS}u;
+    if (!in_bounds) return;
+    uint np = live ? min(mprims, MESH_PRIMS) : 0u, vb = (g * MESH_VERTS + min(v, MESH_VERTS - 1u)) * {MESH_VWORDS}u;
     for (uint k = 0u; k < {MESH_VWORDS}u; k++) mvo.d[vb + k] = mv[k * 32u + v];
     for (uint p = v; p < MESH_PRIMS; p += 32u)
-        for (uint k = 0u; k < 3u; k++) mto.d[(g * MESH_PRIMS + p) * 3u + k] = g * 32u + (p < np ? mib[3u * p + k] : 0u);
+        for (uint k = 0u; k < 3u; k++)
+            mto.d[(g * MESH_PRIMS + p) * 3u + k] = g * MESH_VERTS + (p < np ? min(mib[3u * p + k], MESH_VERTS - 1u) : 0u);
 }}
 """
 )
@@ -254,7 +264,7 @@ MESH_CS_VS_KEY = "6d6b772d6d6573682d63732d76732d31" * 2   # "mkw-mesh-cs-vs-1" t
 
 def mesh_head_cs(head: list[str]) -> list[str]:
     """mesh_head as a compute shader: tp is shared memory filled from the task's record."""
-    out = [*head, "layout(local_size_x = 32) in;", "const uint MESH_PRIMS = 64u;",
+    out = [*head, "layout(local_size_x = 32) in;", "const uint MESH_VERTS = 32u;", "const uint MESH_PRIMS = 64u;",
            f"const uint MV_WORDS = {(4 + 4 * MESH_GENERICS) * 32}u;",
            # the runtime knows whether a task program comes first (the pipeline's pair), the translator does not
            "#define HAS_TASK (mp.has_task != 0u)",

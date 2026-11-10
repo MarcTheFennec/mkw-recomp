@@ -7,17 +7,69 @@ class Unsupported(Exception):
     pass
 
 
+# Wave32 subgroup emulation on Wave64 hardware (e.g., AMD GCN 5.1 / Vega APUs where minSubgroupSize == 64 and
+# requiredSubgroupSizeStages == 0): each 64-wide subgroup is logically split into two independent 32-lane virtual
+# warps via warp_half = gl_SubgroupInvocationID & 32u and lane_id = gl_SubgroupInvocationID & 31u. On native Wave32
+# devices warp_half is always 0u.
+SG32_HELPERS = """uvec4 sg32_ballot(bool pred) {
+    uint warp_half = gl_SubgroupInvocationID & 32u;
+    uvec4 ballot = subgroupBallot(pred);
+    return (warp_half == 0u) ? uvec4(ballot.x, 0u, 0u, 0u) : uvec4(ballot.y, 0u, 0u, 0u);
+}
+uint sg32_ballot_bit_count(uvec4 b) { return subgroupBallotBitCount(uvec4(b.x, 0u, 0u, 0u)); }
+uint sg32_ballot_excl_bit_count(uvec4 b) {
+    uint lane_id = gl_SubgroupInvocationID & 31u;
+    return subgroupBallotBitCount(uvec4(b.x & ((1u << lane_id) - 1u), 0u, 0u, 0u));
+}
+uint sg32_ballot_incl_bit_count(uvec4 b) {
+    uint lane_id = gl_SubgroupInvocationID & 31u;
+    uint m = (lane_id == 31u) ? 0xffffffffu : ((1u << (lane_id + 1u)) - 1u);
+    return subgroupBallotBitCount(uvec4(b.x & m, 0u, 0u, 0u));
+}
+bool sg32_all(bool pred) { return sg32_ballot(pred).x == sg32_ballot(true).x; }
+bool sg32_any(bool pred) { return sg32_ballot(pred).x != 0u; }
+bool sg32_all_equal(bool pred) {
+    uint m = sg32_ballot(pred).x, a = sg32_ballot(true).x;
+    return m == 0u || m == a;
+}
+bool sg32_elect() {
+    uint warp_half = gl_SubgroupInvocationID & 32u;
+    uvec4 ballot = subgroupBallot(true);
+    return (gl_SubgroupInvocationID & 31u) == uint(findLSB((warp_half == 0u) ? ballot.x : ballot.y));
+}
+uint sg32_shfl(uint val, uint src_lane) {
+    uint warp_half = gl_SubgroupInvocationID & 32u;
+    return subgroupShuffle(val, warp_half | (src_lane & 31u));
+}
+uvec2 sg32_shfl(uvec2 val, uint src_lane) {
+    uint warp_half = gl_SubgroupInvocationID & 32u;
+    return subgroupShuffle(val, warp_half | (src_lane & 31u));
+}
+uint sg32_shfl_xor(uint val, uint mask) {
+    uint warp_half = gl_SubgroupInvocationID & 32u, lane_id = gl_SubgroupInvocationID & 31u;
+    return subgroupShuffle(val, warp_half | ((lane_id ^ mask) & 31u));
+}
+uint sg32_shfl_up(uint val, uint delta) {
+    uint warp_half = gl_SubgroupInvocationID & 32u, lane_id = gl_SubgroupInvocationID & 31u;
+    return subgroupShuffle(val, warp_half | ((lane_id - delta) & 31u));
+}
+uint sg32_shfl_down(uint val, uint delta) {
+    uint warp_half = gl_SubgroupInvocationID & 32u, lane_id = gl_SubgroupInvocationID & 31u;
+    return subgroupShuffle(val, warp_half | ((lane_id + delta) & 31u));
+}"""
+
 # SHFL as Ryujinx HelperFunctionManager.cs GenerateShuffle* (MIT): c = clamp (bits 0-4) | segment mask (bits 8-12);
-# an out-of-range source lane keeps the thread's own value and clears the validity predicate. Subgroup of 32 (the back
-# end pins RADV to 32-wide waves for these stages).
+# an out-of-range source lane keeps the thread's own value and clears the validity predicate. Virtual 32-lane warp
+# within Wave32 or Wave64 subgroups.
 SHFL_FN = """uint shfl(uint v, uint src, uint c, uint mode, out bool ok) {
-    uint lane = gl_SubgroupInvocationID, seg = (c >> 8) & 31u, lo = lane & seg, hi = (c & 31u & ~seg) | lo;
+    uint warp_half = gl_SubgroupInvocationID & 32u, lane = gl_SubgroupInvocationID & 31u;
+    uint seg = (c >> 8) & 31u, lo = lane & seg, hi = (c & 31u & ~seg) | lo;
     uint s;
     if (mode == 0u) { s = (src & ~seg) | lo; ok = s <= hi; }
     else if (mode == 1u) { s = lane - src; ok = int(s) >= int(lo); }
     else if (mode == 2u) { s = lane + src; ok = s <= hi; }
     else { s = lane ^ src; ok = s <= hi; }
-    uint r = subgroupShuffle(v, s & 31u);
+    uint r = subgroupShuffle(v, warp_half | (s & 31u));
     return ok ? r : v;
 }"""
 
@@ -26,17 +78,19 @@ SHFL_FN = """uint shfl(uint v, uint src, uint c, uint mode, out bool ok) {
 # 2(t%4) and 2(t%4)+1 as one register, or with .trans (MT88) those of the transposed matrix.
 LDSM_FN = """uint smem16(uint b) { return (smem[b >> 2] >> ((b & 2u) * 8u)) & 0xffffu; }
 uint ldsm(uint a, uint i, bool trans) {
-    uint lane = gl_SubgroupInvocationID, r = lane >> 2, q = lane & 3u;
-    uint p = subgroupShuffle(a, i * 8u + r), c0 = subgroupShuffle(a, i * 8u + 2u * q),
-         c1 = subgroupShuffle(a, i * 8u + 2u * q + 1u);
+    uint warp_half = gl_SubgroupInvocationID & 32u, lane = gl_SubgroupInvocationID & 31u, r = lane >> 2, q = lane & 3u;
+    uint p = subgroupShuffle(a, warp_half | ((i * 8u + r) & 31u)),
+         c0 = subgroupShuffle(a, warp_half | ((i * 8u + 2u * q) & 31u)),
+         c1 = subgroupShuffle(a, warp_half | ((i * 8u + 2u * q + 1u) & 31u));
     return trans ? smem16(c0 + 2u * r) | (smem16(c1 + 2u * r) << 16) : smem[(p >> 2) + q];
 }"""
 
 # MOVM.16.MT88 as PTX movmatrix.sync.aligned.m8n8.trans.b16: lane t holds row t/4, columns 2(t%4) and 2(t%4)+1 of an
 # 8x8 matrix of 16-bit elements, and receives the same of its transpose: element (row, col) sits in lane row*4 + col/2.
 MOVM_FN = """uint movm(uint v) {
-    uint lane = gl_SubgroupInvocationID, r = lane >> 2, q = lane & 3u, sh = (r & 1u) * 16u;
-    uint lo = subgroupShuffle(v, 2u * q * 4u + (r >> 1)), hi = subgroupShuffle(v, (2u * q + 1u) * 4u + (r >> 1));
+    uint warp_half = gl_SubgroupInvocationID & 32u, lane = gl_SubgroupInvocationID & 31u, r = lane >> 2, q = lane & 3u, sh = (r & 1u) * 16u;
+    uint lo = subgroupShuffle(v, warp_half | ((2u * q * 4u + (r >> 1)) & 31u)),
+         hi = subgroupShuffle(v, warp_half | (((2u * q + 1u) * 4u + (r >> 1)) & 31u));
     return ((lo >> sh) & 0xffffu) | (((hi >> sh) & 0xffffu) << 16);
 }"""
 
@@ -45,14 +99,14 @@ MOVM_FN = """uint movm(uint v) {
 # (row g+8), a2 (row g, k 2t+8..), a3 (row g+8, k 2t+8..); B b0 (k 2t..2t+1, column g), b1 (k 2t+8..); C and D c0 (row
 # g, columns 2t..2t+1), c1 (row g+8). Products summed in fp32 and rounded to fp16 once, at the end.
 HMMA_FN = """void hmma(uint a0, uint a1, uint a2, uint a3, uint b0, uint b1, uint c0, uint c1, out uint d0, out uint d1) {
-    uint lane = gl_SubgroupInvocationID, g = lane >> 2, t = lane & 3u;
+    uint warp_half = gl_SubgroupInvocationID & 32u, lane = gl_SubgroupInvocationID & 31u, g = lane >> 2, t = lane & 3u;
     vec2 lo = unpackHalf2x16(c0), hi = unpackHalf2x16(c1);
     for (uint s = 0u; s < 4u; s++) {
-        uint from = g * 4u + s;
+        uint from = warp_half | ((g * 4u + s) & 31u);
         vec2 ar0 = unpackHalf2x16(subgroupShuffle(a0, from)), ar1 = unpackHalf2x16(subgroupShuffle(a1, from));
         vec2 ar2 = unpackHalf2x16(subgroupShuffle(a2, from)), ar3 = unpackHalf2x16(subgroupShuffle(a3, from));
         for (uint j = 0u; j < 2u; j++) {
-            uint col = (2u * t + j) * 4u + s;
+            uint col = warp_half | (((2u * t + j) * 4u + s) & 31u);
             vec2 bk0 = unpackHalf2x16(subgroupShuffle(b0, col)), bk1 = unpackHalf2x16(subgroupShuffle(b1, col));
             lo[j] += dot(ar0, bk0) + dot(ar2, bk1);
             hi[j] += dot(ar1, bk0) + dot(ar3, bk1);
