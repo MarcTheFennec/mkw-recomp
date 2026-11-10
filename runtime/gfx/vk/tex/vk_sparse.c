@@ -125,10 +125,10 @@ typedef struct DummyBlock {
 static DummyBlock *dummies;
 
 // Allocates a single 64 KiB (or slot_size) zero-filled dummy VkDeviceMemory block for devices where
-// sparseResidencyNonResidentStrict is false, so unmapped sparse blocks never trigger an amdgpu VM page fault.
+// residencyNonResidentStrict is false, so unmapped sparse blocks never trigger an amdgpu VM page fault.
 static void dummy_get(VkCtx *c, uint32_t type_bits, VkDeviceSize slot_size, VkDeviceMemory *out_mem, VkDeviceSize *out_off) {
     *out_mem = VK_NULL_HANDLE, *out_off = 0;
-    if (c->props.limits.sparseResidencyNonResidentStrict) return;
+    if (c->props.sparseProperties.residencyNonResidentStrict) return;
     VkDeviceSize sz = slot_size > PAGE ? slot_size : PAGE;
     plat_mutex_lock(&sp_lock);
     for (DummyBlock *d = dummies; d; d = d->next)
