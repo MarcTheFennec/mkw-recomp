@@ -20,8 +20,7 @@ enum { POOL_IMPORT = 1, POOL_PHYS, POOL_VIRT };
 enum { MS_NONE, MS_ON, MS_REFUSED };
 
 typedef struct { struct PoolRec *phys; uint64_t off; } VPage;   // virtual page -> physical pool and offset
-typedef struct { VkBuffer buf; VmaAllocation alloc; uint64_t use; } PhysChunk;   // POOL_PHYS: device memory of one
-                                                                                  // chunk; use: vk_guard_note
+typedef struct { VkBuffer buf; VmaAllocation alloc; VkDeviceMemory mem; uint64_t use; } PhysChunk;   // POOL_PHYS: device memory (or UMA imported host memory) of one chunk; use: vk_guard_note
 
 typedef struct PoolRec {
     const pool_t *key;
@@ -117,6 +116,7 @@ void gen_reset(void);
 
 // vk_mem_dirty.c: dirty census (MKW_TRACE=perf)
 void dirty_frame(uint64_t frame);
+int vk_mem_is_discrete(void);
 
 // vk_mem_shadow.c: shadow storage
 extern int shadow_on, read_traps, wb_defer;

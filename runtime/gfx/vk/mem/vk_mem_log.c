@@ -93,6 +93,7 @@ void vk_mem_census(uint64_t frame) {
 }
 
 static int g_discrete;   // vk_mem_class_log: the device class is discrete
+int vk_mem_is_discrete(void) { return g_discrete; }
 
 // MKW_VRAM_USED (default: vma on a discrete GPU, driver otherwise; "ab"): what counts as VRAM in use against the
 // driver's budget. The driver's heap usage on NVIDIA's Windows driver includes the host memory the runtime imports
@@ -207,7 +208,9 @@ static void mirror_mode(int discrete) {
 #ifdef _WIN32
     shadow_on = sh && *sh && strcmp(sh, "0");
 #else
-    shadow_on = !sh || !*sh || strcmp(sh, "0");
+    // On UMA (mode == 0, import), CPU-visible pools directly import guest memory (VK_EXT_external_memory_host)
+    // instead of duplicating hundreds of megabytes of guest heaps as shadow copies, unless MKW_SHADOW=1 is set.
+    shadow_on = sh && *sh ? strcmp(sh, "0") != 0 : (discrete && mode > 0);
 #endif
     if (shadow_on) rt_log("mem: shadow storage: CPU-visible pools are host-visible copies of guest memory, not imports%s",
                           sh && *sh ? " (MKW_SHADOW)" : "");

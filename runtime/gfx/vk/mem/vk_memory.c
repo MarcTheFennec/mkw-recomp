@@ -120,7 +120,7 @@ int vk_pool_needs_drain(const pool_t *p) {
     plat_mutex_lock_shared(&pool_lock);
     const pidx_ent *e = pidx_find(&pool_index, (uintptr_t)p->mem, 0);
     const PoolRec *r = e && e->key == p ? e->buf : NULL;
-    int need = r && r->kind == POOL_IMPORT && r->mem;   // imported or placed: its GPU storage is guest memory
+    int need = r && ((r->kind == POOL_IMPORT && r->mem) || (r->kind == POOL_PHYS && !vk_mem_is_discrete()));   // imported or placed: its GPU storage is guest memory
     plat_mutex_unlock_shared(&pool_lock);
     return need;
 }
@@ -158,6 +158,8 @@ void vk_pool_fini(pool_t *p) {
     // submissions issued so far are done, without holding the game (the idle wait cost ~24 ms per finalize while
     // loading a course, live35).
     int guest_storage = r->kind == POOL_IMPORT && r->mem;   // not a shadow, nor a lazy pool never backed
+    for (uint32_t i = 0; i < r->nchunks && !guest_storage; i++)
+        if (r->chunks[i].mem) guest_storage = 1;
     if (r->used && guest_storage) {
         vk_upload_flush(1);
         vk_queue_lock();
@@ -178,7 +180,7 @@ void vk_pool_fini(pool_t *p) {
             uint64_t part, f = vk_sync_issued_pair(&part);
             vk_guard_tie("pool", (uint64_t)(uintptr_t)r->buf, r->lo, r->use, part);
             for (uint32_t i = 0; i < r->nchunks; i++)
-                if (r->chunks[i].alloc)
+                if (r->chunks[i].buf)
                     vk_guard_tie("physical pool chunk", (uint64_t)(uintptr_t)r->chunks[i].buf, r->lo + i * phys_chunk(),
                                  r->chunks[i].use, part);
             mirror_retiring(r), vk_completion_add(f, mirror_retire, r);
@@ -325,7 +327,7 @@ static int resolve_locked(uint64_t addr, uint64_t size, VkMemSpan *out) {
         e = pidx_find(&pool_index, (uintptr_t)addr, size);
         r = e ? e->buf : NULL;
     }
-    if (r && r->kind == POOL_PHYS && !r->chunks[(addr - r->lo) / phys_chunk()].alloc) {   // a direct use: back its chunk
+    if (r && r->kind == POOL_PHYS && !r->chunks[(addr - r->lo) / phys_chunk()].buf) {   // a direct use: back its chunk
         uint32_t i = (uint32_t)((addr - r->lo) / phys_chunk());
         plat_mutex_unlock_shared(&pool_lock);
         phys_back(r, i, i);
@@ -356,7 +358,7 @@ static int resolve_locked(uint64_t addr, uint64_t size, VkMemSpan *out) {
     } else if (r && r->kind == POOL_PHYS) {
         uint64_t rel = addr - r->lo, ch = phys_chunk(), i = rel / ch;
         PhysChunk *k = &r->chunks[i];
-        if (k->alloc) {
+        if (k->buf) {
             if (vk_guard_on()) vk_guard_note(&r->use), vk_guard_note(&k->use);
             out->buffer = k->buf;
             out->offset = out->alloc_offset = rel - i * ch;
@@ -370,7 +372,7 @@ static int resolve_locked(uint64_t addr, uint64_t size, VkMemSpan *out) {
         PoolRec *ph = k < r->npages ? r->pt[k].phys : NULL;
         uint64_t ch = phys_chunk(), ci = ph ? r->pt[k].off / ch : 0;
         static _Thread_local int retried;   // a chunk that did not fit resolves as unmapped, once
-        if (ph && !ph->chunks[ci].alloc && phys_lazy() && !retried) {   // first GPU use of the chunk: back it, look again
+        if (ph && !ph->chunks[ci].buf && phys_lazy() && !retried) {   // first GPU use of the chunk: back it, look again
             plat_mutex_unlock_shared(&pool_lock);
             phys_back(ph, (uint32_t)ci, (uint32_t)ci);
             retried = 1;
@@ -378,7 +380,7 @@ static int resolve_locked(uint64_t addr, uint64_t size, VkMemSpan *out) {
             retried = 0;
             return ok2;
         }
-        if (ph && ph->chunks[ci].alloc) {   // contiguous pages of the same chunk
+        if (ph && ph->chunks[ci].buf) {   // contiguous pages of the same chunk
             uint64_t base = ci * ch, cend = base + chunk_len(ph, (uint32_t)ci);
             uint64_t off = r->pt[k].off + rel % NVN_VPOOL_PAGE, end = r->pt[k].off + NVN_VPOOL_PAGE;
             for (uint64_t j = k + 1; j < r->npages && end < cend && r->pt[j].phys == ph && r->pt[j].off == end; j++)

@@ -42,7 +42,7 @@ uint64_t vk_mem_phys_dump(void (*emit)(uint64_t addr, const void *p, uint64_t n,
     for (int i = 0; i < k; i++) {
         PoolRec *r = recs[i];
         for (uint32_t c = 0; c < r->nchunks; c++) {
-            if (!r->chunks[c].alloc) continue;
+            if (!r->chunks[c].buf) continue;
             uint64_t len = chunk_len(r, c);
             if (len > cap && !(tmp = realloc(tmp, cap = len))) rt_fatal("vk: out of memory for a chunk");
             chunk_copy(r->chunks[c].buf, 0, tmp, len, 0);
@@ -65,7 +65,7 @@ int vk_mem_phys_load(uint64_t addr, const void *p, uint64_t n) {
     uint32_t c = (uint32_t)(off / phys_chunk());
     if (off % phys_chunk() || n > chunk_len(r, c)) return 0;
     phys_back(r, c, c);
-    if (!r->chunks[c].alloc) return 0;
+    if (!r->chunks[c].buf) return 0;
     chunk_copy(r->chunks[c].buf, 0, (void *)p, n, 1);
     return 1;
 }

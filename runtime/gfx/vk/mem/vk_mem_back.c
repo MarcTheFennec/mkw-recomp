@@ -157,7 +157,17 @@ int import_pool(VkCtx *c, PoolRec *r, uint64_t addr, uint64_t size) {
     }
     VkMemoryRequirements req;
     vkGetBufferMemoryRequirements(c->device, r->buf, &req);
-    int type = memory_type(c, req.memoryTypeBits & hp.memoryTypeBits,
+    int type = -1;
+    if (!vk_mem_is_discrete()) {
+        VkMemoryPropertyFlags uma_want = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        for (uint32_t i = 0; i < c->mem_props.memoryTypeCount && type < 0; i++)
+            if (((req.memoryTypeBits & hp.memoryTypeBits) >> i & 1) &&
+                (c->mem_props.memoryTypes[i].propertyFlags & uma_want) == uma_want)
+                type = (int)i;
+    }
+    if (type < 0)
+        type = memory_type(c, req.memoryTypeBits & hp.memoryTypeBits,
                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     if (type < 0 || req.size > n) {
         rt_log("vk: pool %#llx: no memory type for the import (buffer %#x, host %#x, size %#llx of %#llx)",
@@ -223,7 +233,65 @@ int64_t phys_backed_n, phys_backed_bytes, phys_failed_n;   // phys_lock
 // Serializes chunk allocation: made outside pool_lock (the zero fill records an upload) and published under it.
 PlatMutex phys_lock = PLAT_MUTEX_INIT;
 
-static int alloc_chunk(VkCtx *c, uint64_t size, PhysChunk *out) {
+// On UMA devices supporting VK_EXT_external_memory_host with HOST_VISIBLE | HOST_COHERENT | DEVICE_LOCAL memory types,
+// guest physical pools (e.g. flags 0x18c) directly import the host mmap pointer via VkImportMemoryHostPointerInfoEXT
+// instead of allocating duplicate VMA chunks.
+static int import_phys_chunk(VkCtx *c, const PoolRec *r, uint32_t idx, uint64_t size, PhysChunk *out) {
+    if (vk_mem_is_discrete() || !r->lo) return 0;
+    uint64_t addr = r->lo + (uint64_t)idx * phys_chunk();
+    uint64_t al = c->min_imported_host_alignment ? c->min_imported_host_alignment : 0x1000;
+    if ((addr & (al - 1)) || (size & (al - 1))) return 0;
+    if (!p_host_props)
+        p_host_props = (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(
+            c->device, "vkGetMemoryHostPointerPropertiesEXT");
+    if (!p_host_props) return 0;
+    VkMemoryHostPointerPropertiesEXT hp = {.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
+    if (p_host_props(c->device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, (void *)(uintptr_t)addr, &hp) !=
+            VK_SUCCESS ||
+        !hp.memoryTypeBits)
+        return 0;
+    VkExternalMemoryBufferCreateInfo eb = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+                                           .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT};
+    VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                             .pNext = &eb,
+                             .size = size,
+                             .usage = pool_usage(c),
+                             .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+    if (vkCreateBuffer(c->device, &bi, NULL, &out->buf) != VK_SUCCESS) return 0;
+    VkMemoryRequirements rb;
+    vkGetBufferMemoryRequirements(c->device, out->buf, &rb);
+    uint32_t bits = rb.memoryTypeBits & hp.memoryTypeBits;
+    VkMemoryPropertyFlags want = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    int type = -1;
+    for (uint32_t i = 0; i < c->mem_props.memoryTypeCount && type < 0; i++)
+        if ((bits >> i & 1) && (c->mem_props.memoryTypes[i].propertyFlags & want) == want) type = (int)i;
+    if (type < 0 || rb.size > size) {
+        vkDestroyBuffer(c->device, out->buf, NULL);
+        out->buf = VK_NULL_HANDLE;
+        return 0;
+    }
+    mem_thaw(addr, size);
+    VkImportMemoryHostPointerInfoEXT im = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
+                                           .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+                                           .pHostPointer = (void *)(uintptr_t)addr};
+    VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                               .pNext = &im,
+                               .allocationSize = size,
+                               .memoryTypeIndex = (uint32_t)type};
+    if (vkAllocateMemory(c->device, &ai, NULL, &out->mem) != VK_SUCCESS ||
+        vkBindBufferMemory(c->device, out->buf, out->mem, 0) != VK_SUCCESS) {
+        if (out->mem) vkFreeMemory(c->device, out->mem, NULL);
+        vkDestroyBuffer(c->device, out->buf, NULL);
+        *out = (PhysChunk){0};
+        return 0;
+    }
+    plat_inc32(&n_imports);
+    return 1;
+}
+
+static int alloc_chunk(VkCtx *c, const PoolRec *r, uint32_t idx, uint64_t size, PhysChunk *out) {
+    if (import_phys_chunk(c, r, idx, size, out)) return 1;
     VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = size, .usage = pool_usage(c),
                              .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
     VkResult res = vkCreateBuffer(c->device, &bi, NULL, &out->buf);
@@ -274,9 +342,9 @@ void phys_back(PoolRec *r, uint32_t first, uint32_t last) {
     VkCtx *c = vk_ctx();
     plat_mutex_lock(&phys_lock);
     for (uint32_t i = first; i <= last && i < r->nchunks; i++) {
-        if (r->chunks[i].alloc) continue;
+        if (r->chunks[i].buf) continue;
         PhysChunk ch = {0};   // use 0: no part names it yet (MKW_GPU_GUARD read garbage there: --probe-vkmem stopped)
-        if (!alloc_chunk(c, chunk_len(r, i), &ch)) {
+        if (!alloc_chunk(c, r, i, chunk_len(r, i), &ch)) {
             if (++phys_failed_n <= 8) vram_log(0);
             continue;
         }
@@ -287,9 +355,9 @@ void phys_back(PoolRec *r, uint32_t first, uint32_t last) {
         int64_t n = ++phys_backed_n;
         phys_backed_bytes += (int64_t)chunk_len(r, i);
         if (n <= 4 || !(n & (n - 1)))
-            rt_log("vk: %lld physical pool chunks backed, %.0f MiB (last: chunk %u of %u of pool %#llx+%#llx flags %#x)",
+            rt_log("vk: %lld physical pool chunks backed, %.0f MiB (last: chunk %u of %u of pool %#llx+%#llx flags %#x%s)",
                    (long long)n, phys_backed_bytes / 1048576.0, i, r->nchunks, (unsigned long long)r->lo,
-                   (unsigned long long)r->size, r->flags);
+                   (unsigned long long)r->size, r->flags, ch.mem ? ", imported host memory" : "");
     }
     plat_mutex_unlock(&phys_lock);
 }
@@ -306,8 +374,8 @@ void destroy_rec(VkCtx *c, PoolRec *r) {
     if (vk_guard_on()) {   // a virtual pool's record holds no GPU object: its pages are the physical pools'
         if (r->kind != POOL_VIRT) vk_guard_dead("pool", (uint64_t)(uintptr_t)r->buf, r->lo, r->use);
         for (uint32_t i = 0; i < r->nchunks; i++)
-            if (r->chunks[i].alloc) vk_guard_dead("physical pool chunk", (uint64_t)(uintptr_t)r->chunks[i].buf,
-                                                  r->lo + i * phys_chunk(), r->chunks[i].use);
+            if (r->chunks[i].buf) vk_guard_dead("physical pool chunk", (uint64_t)(uintptr_t)r->chunks[i].buf,
+                                                r->lo + i * phys_chunk(), r->chunks[i].use);
     }
     if (r->mbuf) vmaDestroyBuffer(c->vma, r->mbuf, r->malloc_);
     if (r->smap) mem_untrap(r->import_lo, r->import_hi - r->import_lo);   // trapped pages take their bytes from it
@@ -318,6 +386,7 @@ void destroy_rec(VkCtx *c, PoolRec *r) {
     for (uint32_t i = 0; i < r->nchunks; i++) {
         if (r->chunks[i].buf) vkDestroyBuffer(c->device, r->chunks[i].buf, NULL);
         if (r->chunks[i].alloc) vmaFreeMemory(c->vma, r->chunks[i].alloc);
+        if (r->chunks[i].mem) vkFreeMemory(c->device, r->chunks[i].mem, NULL);
     }
     free(r->chunks);
     free(r->pseen);

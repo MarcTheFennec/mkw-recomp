@@ -67,7 +67,10 @@ static unsigned env_u(const char *name, unsigned def) {
 }
 
 void flight_init(void) {
-    if (strcmp(cfg_value("MKW_FLIGHT"), "1")) return;
+    // Off by default (especially on UMA / low-memory systems where the 131 MB host-visible thumbnail ring consumes
+    // shared system RAM) unless explicitly enabled via MKW_FLIGHT=1 or mkw.ini.
+    const char *fl = cfg_get("MKW_FLIGHT");
+    if (!fl || strcmp(fl, "1") || strcmp(cfg_value("MKW_FLIGHT"), "1")) return;
     ring_n = (int)env_u("MKW_FLIGHT_FRAMES", 600);
     if (ring_n < 64) ring_n = 64;
     if (ring_n > 7200) ring_n = 7200;

@@ -47,9 +47,44 @@ static void VKAPI_PTR on_allocate(VmaAllocator a, uint32_t type, VkDeviceMemory 
     plat_event_set(&H.ev);
 }
 
+static int default_headroom_on(const VkCtx *c) {
+    if (!c) return 0;
+    int big_local = -1, host_heap = -1;
+    for (uint32_t h = 0; h < c->mem_props.memoryHeapCount; h++) {
+        if (c->mem_props.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+            if (c->mem_props.memoryHeaps[h].size >= (1ull << 30) && big_local < 0) big_local = (int)h;
+        } else if (host_heap < 0) {
+            host_heap = (int)h;
+        }
+    }
+    int is_uma = c->props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ||
+                 c->props.deviceType != VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU || big_local < 0 || host_heap < 0;
+    if (is_uma) return 0;
+    if (c->mem_props.memoryHeapCount > 1) {
+        VkDeviceSize h1_limit = c->mem_props.memoryHeaps[1].size;
+        if (c->vma) {
+            VmaBudget b[VK_MAX_MEMORY_HEAPS];
+            vmaGetHeapBudgets(c->vma, b);
+            if (b[1].budget && b[1].budget < h1_limit) h1_limit = b[1].budget;
+        }
+        const char *lim = cfg_get("MKW_GPU_MEM_LIMIT");
+        if (lim && atoll(lim) > 0) {
+            VkDeviceSize total = 0, cap = (VkDeviceSize)atoll(lim) << 20;
+            for (uint32_t h = 0; h < c->mem_props.memoryHeapCount; h++) total += c->mem_props.memoryHeaps[h].size;
+            VkDeviceSize capped = total > cap ? (VkDeviceSize)((double)cap * (double)c->mem_props.memoryHeaps[1].size / (double)total)
+                                              : c->mem_props.memoryHeaps[1].size;
+            if (capped < h1_limit) h1_limit = capped;
+        }
+        const char *hl1 = cfg_get("MKW_GPU_MEM_LIMIT_HEAP1");
+        if (hl1 && atoll(hl1) > 0) h1_limit = (VkDeviceSize)atoll(hl1) << 20;
+        if (h1_limit < (4096ull << 20)) return 0;
+    }
+    return 1;
+}
+
 const VmaDeviceMemoryCallbacks *vk_headroom_callbacks(void) {
     static const VmaDeviceMemoryCallbacks cb = {.pfnAllocate = on_allocate};
-    H.on = !cfg_get("MKW_VRAM_HEADROOM") || cfg_bool("MKW_VRAM_HEADROOM");
+    H.on = cfg_get("MKW_VRAM_HEADROOM") ? cfg_bool("MKW_VRAM_HEADROOM") : 1;
     return H.on ? &cb : NULL;
 }
 
@@ -126,6 +161,12 @@ void vk_headroom_stop(void) {
 }
 
 void vk_headroom_start(void) {
+    const char *e = cfg_get("MKW_VRAM_HEADROOM");
+    if (!(e && *e) && !default_headroom_on(vk_ctx())) {
+        H.on = 0;
+        rt_log("vk: headroom: off by default on UMA / heap 1 < 4096 MiB (MKW_VRAM_HEADROOM=1 turns it on)");
+        return;
+    }
     if (!H.on || H.started) return;
     plat_mutex_init(&H.lock);
     plat_event_init(&H.ev, 0, 0);
