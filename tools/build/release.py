@@ -177,7 +177,8 @@ def main() -> None:
     if not (dist / "setup").is_dir():
         sys.exit(f"{dist}/setup missing: uv run tools/build/dist.py --target {args.target} first")
     OUT.mkdir(parents=True, exist_ok=True)
-    out = (linux if args.target == "linux" else windows)(dist, args.version)
+    version = args.version.replace("/", "-")
+    out = (linux if args.target == "linux" else windows)(dist, version)
     print(f"{out}: {out.stat().st_size / 2**20:.0f} MiB")
 
 

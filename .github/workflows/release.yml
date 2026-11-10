@@ -46,7 +46,9 @@ jobs:
       - name: Setup tools
         run: uv run tools/build/dist.py --target linux
       - name: AppImage
-        run: uv run tools/build/release.py --target linux --version "${GITHUB_REF_NAME#v}"
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          uv run tools/build/release.py --target linux --version "${ver//\//-}"
       - uses: actions/upload-artifact@v4
         with:
           name: linux
@@ -73,7 +75,9 @@ jobs:
       - name: Setup tools
         run: uv run tools/build/dist.py --target windows
       - name: Zip
-        run: uv run tools/build/release.py --target windows --version "${GITHUB_REF_NAME#v}"
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          uv run tools/build/release.py --target windows --version "${ver//\//-}"
       - uses: actions/upload-artifact@v4
         with:
           name: windows
