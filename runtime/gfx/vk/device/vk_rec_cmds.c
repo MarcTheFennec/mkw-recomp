@@ -14,6 +14,14 @@
 // ---- commands with arrays: a struct with the call's arguments, the arrays after it, pointers into the packet
 
 void rc_vkCmdSetViewportWithCount(VkCommandBuffer cb, uint32_t n, const VkViewport *v) {
+    RecDirtyState *d = rec_dirty_for(cb);
+    if (n <= 16 && v) {
+        if (d->vp_valid && d->vp_n == n && !memcmp(d->vp, v, sizeof *v * n) && !rec_cap_active()) return;
+        memcpy(d->vp, v, sizeof *v * n);
+        d->vp_n = n, d->vp_valid = 1;
+    } else {
+        d->vp_valid = 0;
+    }
     if (!OWNED(cb)) { vkCmdSetViewportWithCount(cb, n, v); return; }
     A_SetViewportWithCount *a = put(R_SetViewportWithCount, sizeof *a + sizeof *v * n);
     uint8_t *at = (uint8_t *)(a + 1);
@@ -22,6 +30,14 @@ void rc_vkCmdSetViewportWithCount(VkCommandBuffer cb, uint32_t n, const VkViewpo
 }
 
 void rc_vkCmdSetScissorWithCount(VkCommandBuffer cb, uint32_t n, const VkRect2D *r) {
+    RecDirtyState *d = rec_dirty_for(cb);
+    if (n <= 16 && r) {
+        if (d->sc_valid && d->sc_n == n && !memcmp(d->sc, r, sizeof *r * n) && !rec_cap_active()) return;
+        memcpy(d->sc, r, sizeof *r * n);
+        d->sc_n = n, d->sc_valid = 1;
+    } else {
+        d->sc_valid = 0;
+    }
     if (!OWNED(cb)) { vkCmdSetScissorWithCount(cb, n, r); return; }
     A_SetScissorWithCount *a = put(R_SetScissorWithCount, sizeof *a + sizeof *r * n);
     uint8_t *at = (uint8_t *)(a + 1);
@@ -207,6 +223,18 @@ void rec_push(PFN_vkCmdPushDescriptorSetKHR fn, VkCommandBuffer cb, VkPipelineBi
 void rec_vertex_input(PFN_vkCmdSetVertexInputEXT fn, VkCommandBuffer cb, uint32_t nb,
                       const VkVertexInputBindingDescription2EXT *b, uint32_t na,
                       const VkVertexInputAttributeDescription2EXT *v) {
+    RecDirtyState *d = rec_dirty_for(cb);
+    if (nb <= 17 && na <= 16) {
+        if (d->vi_valid && d->vi_nb == nb && d->vi_na == na &&
+            (!nb || !memcmp(d->vi_b, b, sizeof *b * nb)) &&
+            (!na || !memcmp(d->vi_a, v, sizeof *v * na)) && !rec_cap_active())
+            return;
+        if (nb) memcpy(d->vi_b, b, sizeof *b * nb);
+        if (na) memcpy(d->vi_a, v, sizeof *v * na);
+        d->vi_nb = nb, d->vi_na = na, d->vi_valid = 1;
+    } else {
+        d->vi_valid = 0;
+    }
     if (!OWNED(cb)) { fn(cb, nb, b, na, v); return; }
     A_VertexInput *a = put(R_VertexInput, sizeof *a + A8(sizeof *b * nb) + A8(sizeof *v * na));
     uint8_t *at = (uint8_t *)(a + 1);

@@ -56,6 +56,7 @@ _Thread_local int pd_on;
 void vk_exec_draw_new_cb(void) {
     vk_exec_draw_thread();
     memset(&B, 0, sizeof B);
+    rec_dirty_reset();
 }
 
 // What is bound is not known any more (MKW_REUSE emitted packets of its own); the memos of this command buffer's
@@ -67,6 +68,7 @@ void vk_exec_draw_forget(void) {
     B.ds_layout = VK_NULL_HANDLE;
     B.ds_bound[0] = B.ds_bound[1] = VK_NULL_HANDLE;
     B.ds_pushed[0] = B.ds_pushed[1] = 0;
+    rec_dirty_reset();
 }
 
 // ---- program to shaders
@@ -531,6 +533,10 @@ int prepare_draw_ex(VkExec *ex, int prim, int32_t count, int restart, int mesh) 
     PD_MARK(PD_PIPE);
     bind_pipeline(ex, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
     recent_note(vs, fs);
+    vk_crumbs_set_state(nvn_hm_hash(&s, sizeof s), vs ? gfx_shader_key(vs) : NULL,
+                        fs ? gfx_shader_key(fs) : NULL,
+                        mesh == 2 ? "DrawMeshTasks (MKW_MESH_COMPUTE)" : mesh ? "DrawMeshTasks" : "Draw",
+                        mesh == 2);
     if (!B.st_valid || memcmp(&B.st, &s, sizeof s)) {
         vk_pipeline_set_dynamic(ex->cb, &s);
         ex->recorded++;

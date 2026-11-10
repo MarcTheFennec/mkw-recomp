@@ -4,6 +4,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "vk.h"
 
@@ -62,3 +63,28 @@ void rec_pub(void);
 void rec_fallback(void);                    // a call the ring takes no packet for: everything queued first
 // Copies arr after the fixed part at *at and returns where it went (NULL for none).
 void *rec_tail_copy(uint8_t **at, const void *arr, size_t bytes);
+
+typedef struct {
+    VkCommandBuffer cb;
+    uint8_t vp_valid, sc_valid, db_valid, bc_valid, sr_valid[2], vi_valid;
+    uint32_t vp_n, sc_n;
+    VkViewport vp[16];
+    VkRect2D sc[16];
+    float db[3];
+    float bc[4];
+    uint32_t sr[2];
+    uint32_t vi_nb, vi_na;
+    VkVertexInputBindingDescription2EXT vi_b[17];
+    VkVertexInputAttributeDescription2EXT vi_a[16];
+} RecDirtyState;
+
+extern _Thread_local RecDirtyState rec_dirty;
+int rec_cap_active(void);
+
+static inline RecDirtyState *rec_dirty_for(VkCommandBuffer cb) {
+    if (rec_dirty.cb != cb) {
+        memset(&rec_dirty, 0, sizeof rec_dirty);
+        rec_dirty.cb = cb;
+    }
+    return &rec_dirty;
+}

@@ -31,6 +31,11 @@ static uint64_t last_pk;               // producer: the header word of the last 
 uint32_t lz[256];
 int nlz;
 static int rec_prio;                   // the submitting thread's priority, which the recorder takes
+_Thread_local RecDirtyState rec_dirty;
+
+void rec_dirty_reset(void) {
+    memset(&rec_dirty, 0, sizeof rec_dirty);
+}
 
 // Producer statistics, logged by rec_stats_log.
 static struct { uint64_t packets, words, drains, fallbacks, drain_ns, full_waits, full_ns, parts, parts_on; } RS_;
@@ -164,6 +169,7 @@ void rec_begin(VkCommandBuffer cb) {
     }
     if (rec_diff_on < 0) rec_diff_on = rt_knob("REC_DIFF", "0");
     RS_.parts++;
+    rec_dirty_reset();
     if (!RT_KNOB_ON(mode)) return;
     RS_.parts_on++;
     rec_cb = cb;   // the recorder is idle: rec_end drained it
@@ -261,12 +267,31 @@ FIXED(FillBuffer, (VkCommandBuffer cb, VkBuffer b, VkDeviceSize o, VkDeviceSize 
 #define PACK_ResetQueryPool *a = (A_ResetQueryPool){p, f, n}
 FIXED(ResetQueryPool, (VkCommandBuffer cb, VkQueryPool p, uint32_t f, uint32_t n), (cb, p, f, n), VkQueryPool p;
       uint32_t f, n)
-#define PACK_SetBlendConstants memcpy(a->c, c, sizeof a->c)
-FIXED(SetBlendConstants, (VkCommandBuffer cb, const float c[4]), (cb, c), float c[4])
+typedef struct { float c[4]; } A_SetBlendConstants;
+void rc_vkCmdSetBlendConstants(VkCommandBuffer cb, const float c[4]) {
+    RecDirtyState *d = rec_dirty_for(cb);
+    if (d->bc_valid && !memcmp(d->bc, c, sizeof d->bc) && !rec_cap_active()) return;
+    memcpy(d->bc, c, sizeof d->bc);
+    d->bc_valid = 1;
+    if (!OWNED(cb)) { vkCmdSetBlendConstants(cb, c); return; }
+    A_SetBlendConstants *a = put(R_SetBlendConstants, sizeof *a);
+    memcpy(a->c, c, sizeof a->c);
+    pub();
+}
 #define PACK_SetCullMode a->v = m
 FIXED(SetCullMode, (VkCommandBuffer cb, VkCullModeFlags m), (cb, m), VkCullModeFlags v)
-#define PACK_SetDepthBias *a = (A_SetDepthBias){c, cl, s}
-FIXED(SetDepthBias, (VkCommandBuffer cb, float c, float cl, float s), (cb, c, cl, s), float c, cl, s)
+typedef struct { float c, cl, s; } A_SetDepthBias;
+void rc_vkCmdSetDepthBias(VkCommandBuffer cb, float c, float cl, float s) {
+    RecDirtyState *d = rec_dirty_for(cb);
+    float cur[3] = {c, cl, s};
+    if (d->db_valid && !memcmp(d->db, cur, sizeof cur) && !rec_cap_active()) return;
+    memcpy(d->db, cur, sizeof cur);
+    d->db_valid = 1;
+    if (!OWNED(cb)) { vkCmdSetDepthBias(cb, c, cl, s); return; }
+    A_SetDepthBias *a = put(R_SetDepthBias, sizeof *a);
+    *a = (A_SetDepthBias){c, cl, s};
+    pub();
+}
 #define PACK_SetDepthBiasEnable a->v = v
 FIXED(SetDepthBiasEnable, (VkCommandBuffer cb, VkBool32 v), (cb, v), VkBool32 v)
 #define PACK_SetDepthCompareOp a->v = v
@@ -289,9 +314,20 @@ FIXED(SetStencilCompareMask, (VkCommandBuffer cb, VkStencilFaceFlags f, uint32_t
 #define PACK_SetStencilOp *a = (A_SetStencilOp){f, x, y, z, d}
 FIXED(SetStencilOp, (VkCommandBuffer cb, VkStencilFaceFlags f, VkStencilOp x, VkStencilOp y, VkStencilOp z, VkCompareOp d),
       (cb, f, x, y, z, d), VkStencilFaceFlags f; VkStencilOp x, y, z; VkCompareOp d)
-#define PACK_SetStencilReference *a = (A_SetStencilReference){f, v}
-FIXED(SetStencilReference, (VkCommandBuffer cb, VkStencilFaceFlags f, uint32_t v), (cb, f, v), VkStencilFaceFlags f;
-      uint32_t v)
+typedef struct { VkStencilFaceFlags f; uint32_t v; } A_SetStencilReference;
+void rc_vkCmdSetStencilReference(VkCommandBuffer cb, VkStencilFaceFlags f, uint32_t v) {
+    RecDirtyState *d = rec_dirty_for(cb);
+    int hit = (f & 3) != 0;
+    if ((f & VK_STENCIL_FACE_FRONT_BIT) && (!d->sr_valid[0] || d->sr[0] != v)) hit = 0;
+    if ((f & VK_STENCIL_FACE_BACK_BIT) && (!d->sr_valid[1] || d->sr[1] != v)) hit = 0;
+    if (hit && !rec_cap_active()) return;
+    if (f & VK_STENCIL_FACE_FRONT_BIT) d->sr[0] = v, d->sr_valid[0] = 1;
+    if (f & VK_STENCIL_FACE_BACK_BIT) d->sr[1] = v, d->sr_valid[1] = 1;
+    if (!OWNED(cb)) { vkCmdSetStencilReference(cb, f, v); return; }
+    A_SetStencilReference *a = put(R_SetStencilReference, sizeof *a);
+    *a = (A_SetStencilReference){f, v};
+    pub();
+}
 #define PACK_SetStencilTestEnable a->v = v
 FIXED(SetStencilTestEnable, (VkCommandBuffer cb, VkBool32 v), (cb, v), VkBool32 v)
 #define PACK_SetStencilWriteMask *a = (A_SetStencilWriteMask){f, v}

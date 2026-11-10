@@ -82,6 +82,7 @@ CbRes *cb_res_new(VkExec *ex) {
     if (!cur) rt_fatal("vk: out of memory");
     cur_fence = ex->fence;
     memset(&B, 0, sizeof B);
+    rec_dirty_reset();
     vk_completion_add(ex->fence, cb_done, cur);
     return cur;
 }

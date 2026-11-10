@@ -17,6 +17,7 @@
 void rec_begin(VkCommandBuffer cb);   // the submitting thread, sub_lock held
 void rec_end(void);                   // waits for the recorder; no-op when rec_begin did not start it
 void rec_drain(void);                 // waits until the recorder made every call queued so far
+void rec_dirty_reset(void);           // resets per-chunk dirty state tracking on the calling thread
 void rec_stats_log(void);             // MKW_TRACE=perf: packets, bytes, drains and waits since the last call
 
 // Extension commands called through device function pointers.

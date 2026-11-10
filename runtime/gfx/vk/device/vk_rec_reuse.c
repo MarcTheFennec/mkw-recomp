@@ -137,6 +137,7 @@ static void rec_slot_op(uint32_t op, const uint64_t *p, uint32_t words) {
 }
 
 int rec_owned(VkCommandBuffer cb) { return OWNED(cb); }
+int rec_cap_active(void) { return CAP.on; }
 
 void rec_cap_note_fallback(void) {
     if (CAP.on) CAP.bad = 2;
@@ -248,4 +249,5 @@ void rec_win_emit(VkCommandBuffer cb, const RecWin *w, int from, int to) {
         for (int i = w->pk_pair[k]; i < w->pk_pair[k + 1]; i++) slot[w->psl[i]] = w->ph[i];
         at += n;
     }
+    rec_dirty_reset();
 }
