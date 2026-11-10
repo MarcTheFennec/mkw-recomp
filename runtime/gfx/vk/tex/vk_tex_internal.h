@@ -41,6 +41,7 @@ typedef struct Tex {
     uint32_t wt_n;                // WriteTexels into the storage since the last upload
     struct Tex *rel_prev, *rel_next;   // while released: the list of released entries, oldest first
     uint8_t sparse;               // a Vulkan sparse image whose tiles follow the game's MapVirtual (vk_sparse.c)
+    uint8_t sparse_fallback;      // a non-sparse VMA-backed image for a sparse texture whose format has no sparse blocks
     uint64_t use;                 // MKW_GPU_GUARD: newest submission part that looked it up (vk_guard_note)
 } Tex;
 

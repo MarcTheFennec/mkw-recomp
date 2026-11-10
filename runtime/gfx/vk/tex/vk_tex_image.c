@@ -425,7 +425,12 @@ Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
     e->pub.addr = k->addr;
     VkImage img = VK_NULL_HANDLE;
     if (vk_sparse_create(&ci, d, k->addr, L.size, &img)) e->sparse = 1;
-    else if (nvn_gpu_only(k->addr)) {   // storage in a physical or virtual pool: alias the pool memory (section 3.2)
+    else if (sparse_cand) {
+        e->sparse_fallback = 1;
+        log_limited(&n_unbound, "sparse texture %#llx (%ux%u fmt %#x, VkFormat %d usage %#x, %u levels, %u layers) "
+                    "has no standard sparse blocks; VMA-backed image instead",
+                    (unsigned long long)k->addr, w, h, d->format, (int)ci.format, ci.usage, ci.mipLevels, ci.arrayLayers);
+    } else if (nvn_gpu_only(k->addr)) {   // storage in a physical or virtual pool: alias the pool memory (section 3.2)
         if (vkCreateImage(c->device, &ci, NULL, &img) == VK_SUCCESS && !bind_pool_memory(c, e, img)) {
             vkDestroyImage(c->device, img, NULL);
             img = VK_NULL_HANDLE;

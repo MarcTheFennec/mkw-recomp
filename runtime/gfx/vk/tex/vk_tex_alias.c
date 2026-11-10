@@ -95,6 +95,116 @@ static int alias_copy(Tex *e, const Tex *src) {
     return 1;
 }
 
+// Copies src's content into e on the upload batch when no inline replay command buffer is open (e.g. during
+// MapVirtual or outside vk_exec_record). Only used when e has its own VMA-backed memory (sparse_fallback).
+static int upload_alias_copy(Tex *e, const Tex *src) {
+    if (alias_copy(e, src)) return 1;
+    if (e->bound_to || src->bound_to) return 0;
+    int bw, bh, bpb = img_block(e, &bw, &bh);
+    if (!bpb) return 0;
+    uint32_t levels = e->pub.levels < src->pub.levels ? e->pub.levels : src->pub.levels;
+    uint32_t layers = e->pub.layers < src->pub.layers ? e->pub.layers : src->pub.layers, n = levels * layers, k = 0;
+    VkImageCopy *rg = calloc(n, sizeof *rg);
+    if (!rg) return 0;
+    for (uint32_t lv = 0; lv < levels; lv++)
+        for (uint32_t ly = 0; ly < layers; ly++, k++) {
+            uint32_t w = mip(e->pub.width, lv), h = mip(e->pub.height, lv), z = mip(e->pub.depth, lv);
+            rg[k] = (VkImageCopy){.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1},
+                                  .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1},
+                                  .extent = {w, h, z}};
+        }
+    VkCommandBuffer cb = vk_upload_begin();
+    barrier(cb, ALL_RW, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    vkCmdCopyImage(cb, src->pub.image, VK_IMAGE_LAYOUT_GENERAL, e->pub.image, VK_IMAGE_LAYOUT_GENERAL, n, rg);
+    barrier(cb, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, ALL_RW);
+    vk_upload_end();
+    free(rg);
+    return 1;
+}
+
+// Copies mapped physical pool pages in [lo, hi) into a non-sparse VMA-backed fallback image e.
+static void remap_virtual_entry(Tex *e, uint64_t lo, uint64_t hi) {
+    uint64_t pa = 0;
+    if (vk_mem_virt_phys(e->pub.addr, &pa)) {
+        Tex *src = NULL;
+        for (Tex *p = nvn_hm_get(&by_addr, &pa); p; p = p->next_at) {
+            if (p == e || p->released) continue;
+            if ((!src || (same_but_swizzle(&p->key, &e->key) && !same_but_swizzle(&src->key, &e->key))) &&
+                alias_compatible(e, p) && alias_has_gpu_content(p))
+                src = p;
+        }
+        if (src && upload_alias_copy(e, src)) {
+            n_alias_copied++;
+            e->pub.gpu_owned = 1;
+            return;
+        }
+    }
+    if (e->pub.gpu_owned) return;
+    int bw, bh, bpb = img_block(e, &bw, &bh);
+    int32_t lay[4];
+    nvn_sparse_tile_layout(&e->t.d, lay);
+    uint32_t ntw = (uint32_t)lay[1], nth = (uint32_t)lay[2], nnvn = (uint32_t)lay[0];
+    if (!bpb || !ntw || !nth || nnvn > 16 ||
+        (uint64_t)(ntw / (uint32_t)bw) * (nth / (uint32_t)bh) * (uint32_t)bpb != NVN_VPOOL_PAGE)
+        return;
+    uint32_t tiles_x[16], tiles_y[16], tile0[16], stride = 0;
+    for (uint32_t l = 0; l < nnvn; l++) {
+        uint32_t lw = mip(e->pub.width, l), lh = mip(e->pub.height, l);
+        tiles_x[l] = (lw + ntw - 1) / ntw, tiles_y[l] = (lh + nth - 1) / nth, tile0[l] = stride;
+        stride += tiles_x[l] * tiles_y[l];
+    }
+    if (!stride) return;
+    if (lo < e->pub.addr) lo = e->pub.addr;
+    if (hi > e->pub.addr + e->t.L.size) hi = e->pub.addr + e->t.L.size;
+    VkCommandBuffer cb = VK_NULL_HANDLE;
+    for (uint64_t a = lo & ~(uint64_t)(NVN_VPOOL_PAGE - 1); a < hi; a += NVN_VPOOL_PAGE) {
+        uint64_t p = (a - e->pub.addr) / NVN_VPOOL_PAGE;
+        uint32_t layer = (uint32_t)(p / stride), rel = (uint32_t)(p % stride), l = 0;
+        if (layer >= e->pub.layers) continue;
+        while (l + 1 < nnvn && rel >= tile0[l + 1]) l++;
+        if (l >= e->pub.levels) continue;
+        VkMemSpan sp;
+        if (!vk_mem_resolve(a, NVN_VPOOL_PAGE, &sp) || !sp.buffer) continue;
+        uint32_t t = rel - tile0[l], tx = t % tiles_x[l], ty = t / tiles_x[l];
+        uint32_t lw = mip(e->pub.width, l), lh = mip(e->pub.height, l);
+        uint32_t x = tx * ntw, y = ty * nth;
+        if (x >= lw || y >= lh) continue;
+        if (!cb) {
+            cb = vk_upload_begin();
+            barrier(cb, ALL_RW, VK_PIPELINE_STAGE_2_COPY_BIT,
+                    VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        }
+        VkBufferImageCopy rg = {
+            .bufferOffset = sp.offset,
+            .bufferRowLength = ntw,
+            .bufferImageHeight = nth,
+            .imageSubresource = {e->pub.aspect, l, layer, 1},
+            .imageOffset = {(int32_t)x, (int32_t)y, 0},
+            .imageExtent = {lw - x < ntw ? lw - x : ntw, lh - y < nth ? lh - y : nth, 1},
+        };
+        vkCmdCopyBufferToImage(cb, sp.buffer, e->pub.image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+    }
+    if (cb) {
+        barrier(cb, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, ALL_RW);
+        vk_upload_end();
+    }
+}
+
+void vk_texture_remap_virtual(uint64_t lo, uint64_t size) {
+    if (!__atomic_load_n(&tex_ready, __ATOMIC_ACQUIRE)) return;
+    lock();
+    uint64_t hi = lo + size;
+    for (uint32_t i = 0; i < by_key.cap; i++) {
+        Tex *e = by_key.vals ? by_key.vals[i] : NULL;
+        if (!e || e->released || !e->sparse_fallback) continue;
+        if (lo < e->pub.addr + e->t.L.size && e->pub.addr < hi) {
+            remap_virtual_entry(e, lo, hi);
+            tex_gen_bump(e->key.addr);
+        }
+    }
+    unlock();
+}
+
 // The entries at a storage address, chained by next_at (ui/glyphs/glyphs.c re-uploads all of them). Texture lock held.
 Tex *entries_at(uint64_t addr) { return nvn_hm_get(&by_addr, &addr); }
 
@@ -121,23 +231,36 @@ Tex *entry_of(const tex_t *t) {
                 alias_compatible(e, p) && alias_has_gpu_content(p))
                 src = p;
         }
+        uint64_t pa = 0;
+        if (!src && e->sparse_fallback && vk_mem_virt_phys(k.addr, &pa)) {
+            for (Tex *p = nvn_hm_get(&by_addr, &pa); p; p = p->next_at) {
+                if (p->released) continue;
+                alias = 1;
+                if (tex_alias && (!src || (same_but_swizzle(&p->key, &k) && !same_but_swizzle(&src->key, &k))) &&
+                    alias_compatible(e, p) && alias_has_gpu_content(p))
+                    src = p;
+            }
+        }
         if (alias) perf_count(PERF_CNT_TEX_ALIAS);
         if (tex_alias) {
-            if (src && alias_copy(e, src)) {
+            if (src && (alias_copy(e, src) || (e->sparse_fallback && upload_alias_copy(e, src)))) {
                 n_alias_copied++;
-                if (e->pub.mirrored) {   // the content is src's GPU render, newer than the storage bytes
-                    vk_mem_changed(e->pub.addr, e->t.L.size, 0, &e->wgen);
+                if (e->pub.mirrored || e->sparse_fallback) {   // the content is src's GPU render, newer than the storage bytes
+                    if (e->pub.mirrored) vk_mem_changed(e->pub.addr, e->t.L.size, 0, &e->wgen);
                     e->uploaded = 1;
                     e->pub.gpu_owned = 1;
                 }
             } else {
                 init_image(e, vk_upload_begin());
                 vk_upload_end();
+                if (e->sparse_fallback) remap_virtual_entry(e, e->pub.addr, e->pub.addr + e->t.L.size);
                 if (alias) {
                     if (e->pub.mirrored) n_alias_upload++;
                     else n_alias_uninit++;
                 }
             }
+        } else if (e->sparse_fallback) {
+            remap_virtual_entry(e, e->pub.addr, e->pub.addr + e->t.L.size);
         }
         e->next_at = nvn_hm_get(&by_addr, &k.addr);
         nvn_hm_put(&by_addr, &k.addr, e);

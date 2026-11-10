@@ -79,6 +79,8 @@ typedef struct SparseImg {
     VmaAllocation tail_alloc;
     VkDeviceMemory tail_mem;
     VkDeviceSize tail_base;
+    VkDeviceMemory dummy_mem;         // non-null when !sparseResidencyNonResidentStrict: 64 KiB zero-filled dummy block
+    VkDeviceSize dummy_off;
     uint32_t nmips, tail_end, tail_blocks;   // levels; first Vulkan mip tail level (nmips: none); blocks a layer in
                                              // levels nlev..tail_end-1
     VkSparseImageMemoryRequirements tail_req;
@@ -111,6 +113,68 @@ static int binary_pending;        // MKW_SPARSE_ORDER=0: a bind signalled bind_s
 static int64_t n_slots, n_failed, n_binds, n_images, n_blocks, n_over, n_written, n_tail_writes;
 static VmaAllocation *dying_tails;   // tail memory of destroyed images: freed behind the next submission
 static int ndying_tails, cdying_tails, ntail_pending;
+
+typedef struct DummyBlock {
+    VkBuffer buf;
+    VmaAllocation alloc;
+    VkDeviceMemory mem;
+    VkDeviceSize base, size;
+    uint32_t type_bits;
+    struct DummyBlock *next;
+} DummyBlock;
+static DummyBlock *dummies;
+
+// Allocates a single 64 KiB (or slot_size) zero-filled dummy VkDeviceMemory block for devices where
+// sparseResidencyNonResidentStrict is false, so unmapped sparse blocks never trigger an amdgpu VM page fault.
+static void dummy_get(VkCtx *c, uint32_t type_bits, VkDeviceSize slot_size, VkDeviceMemory *out_mem, VkDeviceSize *out_off) {
+    *out_mem = VK_NULL_HANDLE, *out_off = 0;
+    if (c->props.limits.sparseResidencyNonResidentStrict) return;
+    VkDeviceSize sz = slot_size > PAGE ? slot_size : PAGE;
+    plat_mutex_lock(&sp_lock);
+    for (DummyBlock *d = dummies; d; d = d->next)
+        if (d->type_bits == type_bits && d->size >= sz) {
+            *out_mem = d->mem, *out_off = d->base;
+            plat_mutex_unlock(&sp_lock);
+            return;
+        }
+    DummyBlock *d = calloc(1, sizeof *d);
+    if (!d) rt_fatal("vk: out of memory (sparse dummy)");
+    VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = sz,
+                             .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT, .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+    if (vkCreateBuffer(c->device, &bi, NULL, &d->buf) != VK_SUCCESS) {
+        free(d);
+        plat_mutex_unlock(&sp_lock);
+        return;
+    }
+    VkMemoryRequirements rb;
+    vkGetBufferMemoryRequirements(c->device, d->buf, &rb);
+    VkMemoryRequirements req = {.size = sz, .alignment = sz > rb.alignment ? sz : rb.alignment,
+                                .memoryTypeBits = rb.memoryTypeBits & type_bits ? (rb.memoryTypeBits & type_bits) : type_bits};
+    VmaAllocationCreateInfo aci = {.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT};
+    VmaAllocationInfo info;
+    if (!req.memoryTypeBits || vmaAllocateMemory(c->vma, &req, &aci, &d->alloc, &info) != VK_SUCCESS ||
+        vmaBindBufferMemory(c->vma, d->alloc, d->buf) != VK_SUCCESS) {
+        if (d->alloc) vmaFreeMemory(c->vma, d->alloc);
+        vkDestroyBuffer(c->device, d->buf, NULL);
+        free(d);
+        plat_mutex_unlock(&sp_lock);
+        return;
+    }
+    d->mem = info.deviceMemory, d->base = info.offset, d->size = sz, d->type_bits = type_bits;
+    d->next = dummies, dummies = d;
+    VkCommandBuffer cb = vk_upload_begin();
+    vkCmdFillBuffer(cb, d->buf, 0, sz, 0);
+    VkMemoryBarrier2 mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, .srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                           .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT, .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                           .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT};
+    VkDependencyInfo dep = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &mb};
+    vkCmdPipelineBarrier2(cb, &dep);
+    vk_upload_end();
+    *out_mem = d->mem, *out_off = d->base;
+    plat_mutex_unlock(&sp_lock);
+    rt_log("vk: sparse: allocated %llu KiB zero-filled dummy block for non-strict sparse residency (type_bits %#x)",
+           (unsigned long long)(sz >> 10), type_bits);
+}
 
 static void grow(void **arr, int *cap, size_t elem) {
     *cap = *cap ? *cap * 2 : 256;
@@ -244,7 +308,7 @@ static void mark_dirty(SparseImg *s, size_t i) {
     s->dl[s->ndl++] = (uint32_t)i;
 }
 
-// The bind of block i of s to what bound[] names now.
+// The bind of block i of s to what bound[] names now (or the dummy zero block when non-resident strict is absent).
 static VkSparseImageMemoryBind make_bind(const SparseImg *s, uint32_t i) {
     uint32_t layer = i / s->nblk, r = i % s->nblk, l = 0;
     while (l + 1 < s->nlev && r >= s->blk0[l + 1]) l++;
@@ -256,8 +320,8 @@ static VkSparseImageMemoryBind make_bind(const SparseImg *s, uint32_t i) {
         .subresource = {s->aspect, l, layer},
         .offset = {(int32_t)x, (int32_t)y, 0},
         .extent = {lw - x < s->gw ? lw - x : s->gw, lh - y < s->gh ? lh - y : s->gh, 1},
-        .memory = sl ? sl->blk->mem : VK_NULL_HANDLE,
-        .memoryOffset = sl ? sl->blk->base + (VkDeviceSize)sl->idx * s->slot_size : 0};
+        .memory = sl ? sl->blk->mem : s->dummy_mem,
+        .memoryOffset = sl ? sl->blk->base + (VkDeviceSize)sl->idx * s->slot_size : s->dummy_off};
 }
 
 // Binds the Vulkan blocks inside page p of s to what the page maps now (sp_lock held).
@@ -352,18 +416,43 @@ static void tail_free(void *arg) { vmaFreeMemory(vk_ctx()->vma, arg); }
 
 static int order_on(void);
 
-// Binds s's levels outside the tiles now, on the timeline every graphics-queue submission waits on (vk_sparse_order):
-// the game copies into them right after creating the array, and a copy recorded in the upload batch (ASTC decoded
-// into BC7, vk_texture_astc_copy) went out before a bind left for the next replayed submission and was lost (m17).
+// Binds s's levels outside the tiles and any initial dirty/dummy blocks now, on the timeline every graphics-queue
+// submission waits on (vk_sparse_order): the game copies into them right after creating the array, and a copy recorded
+// in the upload batch (ASTC decoded into BC7, vk_texture_astc_copy) went out before a bind left for the next replayed
+// submission and was lost (m17). Also binds unmapped blocks to the dummy zero block on devices without
+// sparseResidencyNonResidentStrict before any shader can sample the image.
 static void tail_bind_now(VkCtx *c, SparseImg *s) {
-    if (!s->tail_pending || !order_on()) return;   // MKW_SPARSE_ORDER=0: with the other binds (vk_sparse_order)
-    VkSparseImageMemoryBindInfo ib;
-    VkSparseImageOpaqueMemoryBindInfo ob;
-    VkSparseImageMemoryBind *bb = malloc(sizeof *bb * ((size_t)s->layers * s->tail_blocks + 1));
-    VkSparseMemoryBind *mb = malloc(sizeof *mb * (tail_count(s) + 1));
-    if (!bb || !mb) rt_fatal("vk: out of memory (sparse tail binds)");
-    tail_binds(s, &ib, bb, &ob, mb);
+    if (!order_on()) return;   // MKW_SPARSE_ORDER=0: with the other binds (vk_sparse_order)
     vk_queue_lock();
+    plat_mutex_lock(&sp_lock);
+    if (!s->tail_pending && !s->ndl) {
+        plat_mutex_unlock(&sp_lock);
+        vk_queue_unlock();
+        return;
+    }
+    VkSparseImageMemoryBindInfo ib = {.image = s->img};
+    VkSparseImageOpaqueMemoryBindInfo ob = {.image = s->img};
+    size_t n_tail_bb = s->tail_pending ? (size_t)s->layers * s->tail_blocks : 0;
+    VkSparseImageMemoryBind *bb = malloc(sizeof *bb * (n_tail_bb + (size_t)s->ndl + 1));
+    VkSparseMemoryBind *mb = malloc(sizeof *mb * ((s->tail_pending ? tail_count(s) : 0) + 1));
+    if (!bb || !mb) rt_fatal("vk: out of memory (sparse tail binds)");
+    if (s->tail_pending) {
+        tail_binds(s, &ib, bb, &ob, mb);
+        s->tail_pending = 0;
+        ntail_pending--;
+    } else {
+        ib.pBinds = bb;
+    }
+    if (s->ndl) {
+        uint32_t nb = ib.bindCount;
+        for (int k = 0; k < s->ndl; k++) {
+            bb[nb++] = make_bind(s, s->dl[k]);
+            s->dirty[s->dl[k]] = 0;
+        }
+        ib.bindCount = nb;
+        s->ndl = 0;
+        ndirty--;
+    }
     if (!order_tl) {
         VkSemaphoreTypeCreateInfo ti = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
                                         .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE};
@@ -382,11 +471,14 @@ static void tail_bind_now(VkCtx *c, SparseImg *s) {
     VkResult r = vkQueueBindSparse(c->gfx_queue, 1, &bi, VK_NULL_HANDLE);
     bind_val = sig;
     s->bind_fence = vk_sync_issued() + 2;   // the submission being recorded may have taken its wait already
+    plat_mutex_unlock(&sp_lock);
     vk_queue_unlock();
-    if (r != VK_SUCCESS) rt_fatal("vk: vkQueueBindSparse of the levels outside the tiles failed (%d)", (int)r);
+    if (r != VK_SUCCESS) {
+        if (r == VK_ERROR_DEVICE_LOST) vk_exec_recent_log();
+        rt_fatal("vk: vkQueueBindSparse of initial sparse binds failed (%d)", (int)r);
+    }
     free(bb);
     free(mb);
-    s->tail_pending = 0;
 }
 
 int vk_sparse_create(const VkImageCreateInfo *ci0, const nvn_texdesc *d, uint64_t addr, uint64_t size, VkImage *out) {
@@ -399,23 +491,34 @@ int vk_sparse_create(const VkImageCreateInfo *ci0, const nvn_texdesc *d, uint64_
     VkImageCreateInfo ci = *ci0;
     ci.flags |= VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT | VK_IMAGE_CREATE_SPARSE_ALIASED_BIT;
     ci.usage &= ~(VkImageUsageFlags)VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
+    VkPhysicalDeviceSparseImageFormatInfo2 sfi = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SPARSE_IMAGE_FORMAT_INFO_2,
+        .format = ci.format,
+        .type = ci.imageType,
+        .samples = ci.samples,
+        .usage = ci.usage,
+        .tiling = ci.tiling,
+    };
     uint32_t n = 0;
-    VkSparseImageFormatProperties fp[4];
-    vkGetPhysicalDeviceSparseImageFormatProperties(c->phys, ci.format, ci.imageType, ci.samples, ci.usage, ci.tiling, &n, NULL);
+    VkSparseImageFormatProperties2 fp2[4];
+    for (int i = 0; i < 4; i++)
+        fp2[i] = (VkSparseImageFormatProperties2){.sType = VK_STRUCTURE_TYPE_SPARSE_IMAGE_FORMAT_PROPERTIES_2};
+    vkGetPhysicalDeviceSparseImageFormatProperties2(c->phys, &sfi, &n, NULL);
     if (n > 4) n = 4;
-    vkGetPhysicalDeviceSparseImageFormatProperties(c->phys, ci.format, ci.imageType, ci.samples, ci.usage, ci.tiling, &n, fp);
-    if (!n || (fp[0].flags & VK_SPARSE_IMAGE_FORMAT_NONSTANDARD_BLOCK_SIZE_BIT)) {
+    vkGetPhysicalDeviceSparseImageFormatProperties2(c->phys, &sfi, &n, fp2);
+    if (!n || (fp2[0].properties.flags & VK_SPARSE_IMAGE_FORMAT_NONSTANDARD_BLOCK_SIZE_BIT)) {
         if (plat_inc32(&nwarn) <= 8) rt_log("vk: sparse: VkFormat %d usage %#x has no standard sparse blocks", (int)ci.format, ci.usage);
         return 0;
     }
+    const VkSparseImageFormatProperties *fp = &fp2[0].properties;
     int32_t lay[4];   // levels with whole tiles, tile width, height, depth
     nvn_sparse_tile_layout(d, lay);
     SparseImg *s = calloc(1, sizeof *s);
     if (!s) rt_fatal("vk: out of memory (sparse image)");
-    s->addr = addr, s->size = size, s->fmt = ci.format, s->aspect = fp[0].aspectMask;
+    s->addr = addr, s->size = size, s->fmt = ci.format, s->aspect = fp->aspectMask;
     s->w = ci.extent.width, s->h = ci.extent.height, s->layers = ci.arrayLayers;
     s->ntw = (uint32_t)lay[1], s->nth = (uint32_t)lay[2];
-    s->gw = fp[0].imageGranularity.width, s->gh = fp[0].imageGranularity.height;
+    s->gw = fp->imageGranularity.width, s->gh = fp->imageGranularity.height;
     if (!s->gw || !s->gh || s->ntw % s->gw || s->nth % s->gh || lay[0] > 16) {
         if (plat_inc32(&nwarn) <= 8)
             rt_log("vk: sparse: NVN tile %ux%u is not whole Vulkan blocks of %ux%u (VkFormat %d)", s->ntw, s->nth, s->gw,
@@ -452,11 +555,14 @@ int vk_sparse_create(const VkImageCreateInfo *ci0, const nvn_texdesc *d, uint64_
         !(s->dirty = calloc((size_t)s->layers * s->nblk, 1)))
         rt_fatal("vk: out of memory (sparse table)");
     tail_alloc(c, s, nr ? &sr : NULL, ci.mipLevels, mr.memoryTypeBits);
-    tail_bind_now(c, s);
+    dummy_get(c, mr.memoryTypeBits, mr.alignment, &s->dummy_mem, &s->dummy_off);
     plat_mutex_lock(&sp_lock);
     s->next = images, images = s;
     if (s->tail_pending) ntail_pending++;
     n_images++;
+    if (s->dummy_mem != VK_NULL_HANDLE) {
+        for (size_t i = 0; i < (size_t)s->layers * s->nblk; i++) mark_dirty(s, i);
+    }
     // Coarse levels first, so a full budget leaves fine detail out rather than whole layers.
     for (int l = (int)s->nlev - 1; l >= 0; l--)
         for (uint32_t y = 0; y < s->layers; y++) {
@@ -465,6 +571,7 @@ int vk_sparse_create(const VkImageCreateInfo *ci0, const nvn_texdesc *d, uint64_
         }
     int64_t ni = n_images, ns = n_slots;
     plat_mutex_unlock(&sp_lock);
+    tail_bind_now(c, s);
     if (ni <= 16 || !(ni & (ni - 1)))
         rt_log("vk: sparse image %lld: %#llx %ux%u layers %u VkFormat %d, NVN tile %ux%u (%u levels, %u pages a layer), "
                "Vulkan block %ux%u of %llu bytes, mip tail from level %u; %lld slots live", (long long)ni,
@@ -515,6 +622,7 @@ void vk_sparse_remap(uint64_t lo, uint64_t size) {
     for (SparseImg *s = images; s; s = s->next)
         if (lo < s->addr + s->size && s->addr < lo + size) bind_range(c, s, lo, lo + size);
     plat_mutex_unlock(&sp_lock);
+    vk_texture_remap_virtual(lo, size);
 }
 
 // Eglantine (d4ee7fcd51) found 13-26% of MKW's sparse terrain blocks written and nine layer pools never written: this
