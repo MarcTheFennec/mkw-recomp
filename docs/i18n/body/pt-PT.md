@@ -43,10 +43,10 @@ O principal trabalho em aberto, por ordem; os pormenores estão em [docs/roadmap
 
 ## Desempenho
 
-Os tempos por fotograma medidos, cada um com a sua data, estão em [docs/performance.md](docs/performance.md). Para
+Os tempos por fotograma medidos, cada um com a versão testada, estão em [docs/performance.md](docs/performance.md). Para
 acrescentar a sua máquina, abra um
 [relatório de desempenho](https://github.com/adriadam10/mkw-recomp/issues/new?template=performance.yml): entra na
-tabela com a data do relatório. Os tempos são os fotogramas do próprio jogo: a geração de fotogramas mostra mais
+tabela com a versão indicada. Os tempos são os fotogramas do próprio jogo: a geração de fotogramas mostra mais
 fotogramas, mas não os encurta. 16,7 ms são 60 fps; com a Taxa de fotogramas em Automático (a da consola) desce para
 30 fps quando não se chega aos 60, e um fotograma acima de 33,3 ms faz a corrida andar mais devagar do que o tempo
 real.

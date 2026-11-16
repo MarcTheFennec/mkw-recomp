@@ -66,6 +66,6 @@ body:
     id: log
     attributes:
       label: Log
-      description: Attach `logs/mkw.log` from the game folder, or `logs/setup.log` if the setup failed. Screenshots help with rendering bugs.
+      description: Attach `logs/mkw.log` from the game folder, or `logs/setup.log` and `logs/warm.log` if the setup failed. Screenshots help with rendering bugs.
     validations:
       required: true

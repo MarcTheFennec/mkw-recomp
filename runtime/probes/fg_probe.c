@@ -2,8 +2,8 @@
 // $MKW_FG_PROBE/a.rgba and b.rgba (uint32 width and height, then the RGBA8 rows; tools/imagen/fg_check.py writes them
 // from PNGs), makes the frame halfway between them as the present thread does and writes it to $MKW_FG_PROBE/mid.png,
 // with the vectors of each level of the search in $MKW_FG_PROBE/flow.bin (uint32 width and height of the grid, then six
-// grids of float16 x, y: vk_fg_flow's levels), then times 20 game frames with one made frame each (the GPU's wall time
-// per frame, its submission included).
+// grids of float16 x, y: vk_fg_flow's levels), then times 20 game frames with one, two and three made frames each (2x,
+// 3x, 4x: the GPU's wall time per game frame, its submission included).
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -124,14 +124,17 @@ int probe_framegen(void) {
         uint32_t dims[2] = {(uint32_t)gw, (uint32_t)gh};
         if (f) fwrite(dims, 4, 2, f), fwrite(info.pMappedData, 4, (size_t)6 * gw * gh, f), fclose(f);
         snprintf(path, sizeof path, "%s/mid.png", dir);
-        double sum = 0, best = 1e9, ms;
-        for (int i = 0; i < 20 && ok; i++) {
-            ok = frame(i & 1 ? ib.img : ia.img, w, h, 1, VK_NULL_HANDLE, &ms) == 2;
-            sum += ms;
-            if (ms < best) best = ms;
+        for (int made = 1; made <= VK_FG_MAX - 1 && ok; made++) {
+            double sum = 0, best = 1e9, ms;
+            for (int i = 0; i < 20 && ok; i++) {
+                ok = frame(i & 1 ? ib.img : ia.img, w, h, made, VK_NULL_HANDLE, &ms) == made + 1;
+                sum += ms;
+                if (ms < best) best = ms;
+            }
+            printf("probe-framegen: %ux%u on %s: %dx, %.2f ms a game frame with %d made (mean of 20, best %.2f)\n", w, h,
+                   c->props.deviceName, made + 1, sum / 20, made, best);
         }
-        printf("probe-framegen: %ux%u on %s: %.2f ms a game frame with one made frame (mean of 20, best %.2f), %s\n", w, h,
-               c->props.deviceName, sum / 20, best, path);
+        printf("probe-framegen: %s\n", path);
     }
     // No device teardown: the process ends here, and vk_shutdown after vk_init stops in VMA's destructor (a pool left
     // over: --probe-astc does the same, 11/11/2026)

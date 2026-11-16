@@ -87,6 +87,7 @@ typedef struct VkExec {
     NVNbufferRange vbuf[16];             // OP_BIND_VBUF
     p_bind_buf ubo[NVN_BIND_STAGES][18], ssbo[NVN_BIND_STAGES][16];   // OP_BIND_UBO / OP_BIND_SSBO per stage and index
     uint64_t tex[NVN_BIND_STAGES][128], samp[NVN_BIND_STAGES][128], img[NVN_BIND_STAGES][32];   // OP_BIND_TEX / OP_BIND_SAMP / OP_BIND_IMG handles per stage
+    uint8_t c24[NVN_BIND_STAGES][NVN_C24_BYTES];   // OP_PUSH_CONST: the driver's push-constant bank c24 per stage; never pushed reads zero
 
     // ---- vk_exec_xfer.c slots (render enable, conditional rendering): left empty by vk_exec.c
     int render_disabled;                 // OP_RENDER_ENABLE false or a failed OP_RENDER_COND: clears and draws skip
@@ -184,6 +185,7 @@ void vk_dump_pass_close(VkExec *ex);   // before vkCmdEndRendering
 int vk_dump_rearm(const char *dir, int ubo, int luts, int log_n);   // MKW_CTL: dump the frame log_n + 1 ahead into dir,
                                                                    // logging the ones before; 0 while one is pending
 void vk_dump_init(void);                 // reads the environment; vk_exec_record's first call
+void vk_dump_shutdown(void);             // after completion callbacks and rtstats workers stop
 void vk_dump_pass_end(VkExec *ex);       // after vkCmdEndRendering
 void vk_dump_draw(VkExec *ex, const VkPipeState *s, VkPipeline p, const VkPipeInfo *info);   // after a draw's binds;
                                                                                            // marks the draws MKW_DUMP_DRAWS selects
@@ -203,6 +205,7 @@ void vk_rtstats_every(uint32_t n);                            // turns it on, on
 void vk_rtstats_pass_end(VkExec *ex);                         // after vkCmdEndRendering
 void vk_rtstats_dispatch(VkExec *ex, const VkPipeInfo *info); // after a dispatch
 void vk_rtstats_flush(void);           // waits for every submission and for the checks of their copies
+void vk_rtstats_shutdown(void);        // after completion callbacks stop: joins scan workers
 uint64_t vk_rtstats_hits(int rule);    // targets that broke the rule so far, logged or not
 
 // c0, the NVN driver constant bank of one stage (vk_exec_ubuf.c; MKW_FIX_C0=0 binds zeros instead): bank is
@@ -220,13 +223,26 @@ void vk_c0_fill(uint8_t bank[VK_C0_BYTES], int stage, const p_bind_buf ssbo[16],
 // alone (1 when op is one); a chunk's start (its state becomes this thread's, x_cur) and end (pass ended, a full barrier,
 // its views freed at its fence, x_cur cleared).
 int vk_exec_op(VkExec *ex, const op_hdr *h);
+void vk_exec_drew(VkExec *ex);   // after a draw vk_exec_op recorded outside walk: the split check
 int vk_exec_state_op(VkExec *ex, uint32_t op, const void *a);
 // seen_depth: the depth images earlier chunks bound (nseen -1: unknown), which clear layer by layer (dc_layered)
 void vk_exec_chunk_begin(VkExec *ex, const VkImage *seen_depth, int nseen);
 void vk_exec_op_pos_set(uint64_t pos);   // a chunk's thread: the position before its first op
 void vk_exec_chunk_end(VkExec *ex);
+// The game's queues' replay states within one submission (OP_QUEUE, nvn_qorder.c): vk_exec_queue_swap saves ex as
+// the state of t->cur and loads that of queue id: 2; a queue first seen goes on from ex: 1; 0 when id is current.
+// The serial replay ends the pass and puts a full barrier first (vk_exec.c queue_switch); the chunks' walk swaps its own
+// table and cuts there, and a chunk's end is that barrier (vk_exec_par.c).
+#define VK_EXEC_QUEUES 4
+typedef struct {
+    struct { uint64_t id; VkExec st; } q[VK_EXEC_QUEUES];
+    int n;
+    uint64_t cur;
+} VkExecQueues;
+int vk_exec_queue_swap(VkExecQueues *t, VkExec *ex, uint64_t id);
 // vk_exec_par.c: called by vk_exec_record before it walks; 1 when it recorded and submitted the submission's ops as
-// chunks (ex then holds the state after the last op and a new command buffer for the rest); 0: walk as usual. diag: a
+// chunks (ex then holds the state after the last op and a new command buffer for the rest); 2 when it recorded them
+// serially itself (a serial head that the rest of the submission did not follow in chunks); 0: walk as usual. diag: a
 // diagnosis that times ops or passes is on (chunks stay off). vk_exec_par_log: the perf line (MKW_TRACE=perf).
 int vk_exec_par(VkExec *ex, const uint64_t *handles, int n, int diag);
 void vk_exec_par_log(void);

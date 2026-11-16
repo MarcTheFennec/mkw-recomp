@@ -191,6 +191,112 @@ int vk_texture_read_image(const tex_t *t, const view_t *v, const NVNcopyRegion *
     return ok;
 }
 
+// ---------------------------------------------------------------- decoded ASTC images (runtime/gfx/cap)
+// The image of an ASTC texture the device does not sample holds what its blocks were decoded into (RGBA8, or the BC7
+// or BC1 encoded from that), and ReadTexels has no ASTC blocks to give back for it: it answers zeros. A capture that
+// took such a texture through ReadTexels replayed it as the decoder's error colour (a race capture's course banner,
+// an array filled by copies between textures and so never in guest memory: flat magenta, 15/11/2026). These hand the
+// image's own bytes to the capture and put them back in the replay.
+static int decoded_block(VkFormat f, uint32_t *bw, uint32_t *bpb) {
+    switch (f) {
+    case VK_FORMAT_R8G8B8A8_UNORM: case VK_FORMAT_R8G8B8A8_SRGB: *bw = 1, *bpb = 4; return 1;
+    case VK_FORMAT_BC1_RGB_UNORM_BLOCK: case VK_FORMAT_BC1_RGB_SRGB_BLOCK: *bw = 4, *bpb = 8; return 1;
+    case VK_FORMAT_BC7_UNORM_BLOCK: case VK_FORMAT_BC7_SRGB_BLOCK: *bw = 4, *bpb = 16; return 1;
+    default: return 0;
+    }
+}
+
+// Bytes of one layer (a 3D image: all its slices) of image level `level`; 0 when e is no decoded ASTC image or has no
+// such level.
+static uint64_t decoded_layer(const Tex *e, uint32_t level, VkExtent3D *ext) {
+    uint32_t bw, bpb;
+    if (!e->f.astc_bw || !e->pub.image || level >= e->pub.levels || !decoded_block(e->pub.format, &bw, &bpb)) return 0;
+    uint32_t w = e->pub.width >> level, h = e->pub.height >> level,
+             d = e->pub.type == VK_IMAGE_TYPE_3D ? e->pub.depth >> level : 1;
+    *ext = (VkExtent3D){w ? w : 1, h ? h : 1, d ? d : 1};
+    return (uint64_t)((ext->width + bw - 1) / bw) * ((ext->height + bw - 1) / bw) * bpb * ext->depth;
+}
+
+int vk_texture_decoded(const tex_t *t, VkTexDecoded *out) {
+    if (!t || !t->mem) return 0;
+    TexKey k;
+    make_key(t, &k);
+    lock();
+    Tex *e = nvn_hm_get(&by_key, &k);   // the live image only: none is made for a capture
+    VkExtent3D ext;
+    int ok = e && !e->released && decoded_layer(e, 0, &ext);
+    if (ok) {
+        *out = (VkTexDecoded){.format = e->pub.format, .levels = e->pub.levels < 16 ? e->pub.levels : 16,
+                              .layers = e->pub.type == VK_IMAGE_TYPE_3D ? 1 : e->pub.layers};
+        for (uint32_t l = 0; l < out->levels; l++) out->bytes[l] = decoded_layer(e, l, &ext);
+    }
+    unlock();
+    return ok;
+}
+
+int vk_texture_decoded_copy(const tex_t *t, VkFormat format, uint32_t level, uint32_t layer, uint32_t nlayers,
+                            uint8_t *buf, uint64_t bytes, int write) {
+    if (!t || !t->mem || !nlayers) return 0;
+    VkCtx *c = vk_ctx();
+    lock();
+    Tex *e;
+    if (write) e = entry_of(t);   // the replay: the image is made here when nothing looked the texture up yet
+    else {
+        TexKey k;
+        make_key(t, &k);
+        e = nvn_hm_get(&by_key, &k);
+        if (e && e->released) e = NULL;
+    }
+    VkExtent3D ext;
+    uint64_t one = e ? decoded_layer(e, level, &ext) : 0;
+    uint32_t layers = e && e->pub.type != VK_IMAGE_TYPE_3D ? e->pub.layers : 1;
+    // Another format or size than the caller's: the capture was made with another ASTC setting or on another GPU
+    if (!one || e->pub.format != format || layer + nlayers > layers || one * nlayers != bytes) {
+        unlock();
+        return 0;
+    }
+    VkBuffer sb;
+    VmaAllocation sa = NULL;
+    uint8_t *stg;
+    VkCommandBuffer cb;
+    if (write) {
+        vk_upload_flush_over(64ull << 20);
+        cb = vk_upload_begin_staging(bytes, &sb, (void **)&stg);
+        memcpy(stg, buf, bytes);
+    } else {
+        stg = vk_staging(bytes, &sb, &sa);
+        cb = vk_upload_begin();
+    }
+    VkBufferImageCopy rg = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, layer, nlayers}, .imageExtent = ext};
+    if (write) {
+        barrier(cb, ALL_RW, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        vkCmdCopyBufferToImage(cb, sb, e->pub.image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+        barrier(cb, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, ALL_RW);
+    } else {
+        barrier(cb, ALL_RW, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        vkCmdCopyImageToBuffer(cb, e->pub.image, VK_IMAGE_LAYOUT_GENERAL, sb, 1, &rg);
+        barrier(cb, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
+                VK_ACCESS_2_HOST_READ_BIT);
+    }
+    vk_upload_end();
+    if (write) {
+        // What the image holds now is newer than its storage, as after a GPU copy: a mirrored texture is not uploaded
+        // from that storage again (the capture's storage never held these texels).
+        if (e->pub.mirrored) {
+            vk_mem_changed(e->pub.addr, e->t.L.size, 0, &e->wgen);
+            e->uploaded = 1;
+            e->pub.gpu_owned = 1;
+        }
+    } else {
+        vk_upload_flush(1);
+        vmaInvalidateAllocation(c->vma, sa, 0, VK_WHOLE_SIZE);
+        memcpy(buf, stg, bytes);
+        vmaDestroyBuffer(c->vma, sb, sa);
+    }
+    unlock();
+    return 1;
+}
+
 // ReadTexels: the pool bytes are the content of a mirrored texture the GPU has not rendered into; every other texture
 // is read back from its image.
 void vk_read_texels(const tex_t *t, const view_t *v, const NVNcopyRegion *r, uint8_t *dst, uint64_t row, uint64_t img) {

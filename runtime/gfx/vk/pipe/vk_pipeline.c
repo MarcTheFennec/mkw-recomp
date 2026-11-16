@@ -174,7 +174,7 @@ int ensure_init(void) {
     vkGetPhysicalDeviceFeatures2(c->phys, &f2);
     P.pv_last = c->has_provoking_vertex && pvf.provokingVertexLast;
     if (!P.pv_last) rt_log("vk_pipeline: provokingVertexLast unavailable: flat outputs come from the first vertex (NVN: last)");
-    // Maxwell warps have 32 lanes; the translator assumes it (maxwell.md 3.4). Pin 32 where the driver allows it.
+    // NVIDIA warps have 32 lanes. Pin 32 where possible; the translator partitions wider subgroups when it cannot.
     if (v13.subgroupSizeControl) {
         VkPhysicalDeviceVulkan13Properties p13 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES};
         VkPhysicalDeviceProperties2 q2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &p13};
@@ -1102,43 +1102,7 @@ AsyncBuilds A = {.idle = PLAT_COND_INIT};
 
 // ---- dynamic state
 
-void vk_pipeline_set_dynamic(VkCommandBuffer cb, const VkPipeState *s) {
-    if (!ensure_init()) return;
-    const poly_st *pl = &s->poly;
-    const ds_st *d = &s->ds;
-    // The front face maps unchanged: TotK sets the upper-left window origin, and the y-flipped viewport (y_flip) puts
-    // NDC +y at row 0 as NVN does, so the framebuffer winding Vulkan tests is the one NVN tests (MacNativeGames passes
-    // it to Metal unchanged; LAS Recomp exec.c mirrors it only for the lower-left origin).
-    int front_cw = pl->front == NVN_FRONT_FACE_CW;
-    vkCmdSetCullMode(cb, (VkCullModeFlags)(pl->cull & 3));   // NVN_FACE_* has VkCullModeFlagBits' values
-    vkCmdSetFrontFace(cb, front_cw ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE);
-    vkCmdSetPrimitiveTopology(cb, vk_pipeline_topology(s->prim));
-    vkCmdSetDepthTestEnable(cb, d->dt);
-    vkCmdSetDepthWriteEnable(cb, d->dw);
-    vkCmdSetDepthCompareOp(cb, compare_op(d->df));
-    vkCmdSetStencilTestEnable(cb, d->st);
-    vkCmdSetStencilOp(cb, VK_STENCIL_FACE_FRONT_BIT, stencil_op(d->fail_f), stencil_op(d->zpass_f), stencil_op(d->zfail_f),
-                      compare_op(d->sf_f));
-    vkCmdSetStencilOp(cb, VK_STENCIL_FACE_BACK_BIT, stencil_op(d->fail_b), stencil_op(d->zpass_b), stencil_op(d->zfail_b),
-                      compare_op(d->sf_b));
-    // NVN_POLYGON_OFFSET_ENABLE_* bit of the polygon mode in use: point 1, line 2, fill 4
-    unsigned mode = pl->mode <= NVN_POLYGON_MODE_FILL ? pl->mode : NVN_POLYGON_MODE_FILL;
-    vkCmdSetDepthBiasEnable(cb, (pl->offset_en >> mode & 1) != 0);
-    vkCmdSetRasterizerDiscardEnable(cb, s->raster_discard != 0);
-    vkCmdSetPrimitiveRestartEnable(cb, s->prim_restart != 0);
-    if (P.dyn_vi && s->vs) {
-        VtxInput v;
-        vertex_input(s, &v);
-        rec_vertex_input(P.set_vi, cb, v.n_bind, v.b, v.n_attr, v.a);
-    }
-    if (P.dyn_clamp) rec_bool(P.set_clamp, cb, s->depth_clamp != 0);
-    if (P.dyn_poly) rec_polygon_mode(P.set_poly, cb, polygon_mode(pl->mode));
-    if (P.dyn_a2c) rec_bool((PFN_vkCmdSetDepthClampEnableEXT)P.set_a2c, cb, s->ms.a2c != 0);   // the same signature
-    int n = target_count(s);
-    if (!n) return;
-    VkBool32 en[8];
-    VkColorBlendEquationEXT eq[8];
-    VkColorComponentFlags wm[8];
+static void blend_arrays(const VkPipeState *s, int n, VkBool32 *en, VkColorBlendEquationEXT *eq, VkColorComponentFlags *wm) {
     for (int i = 0; i < n; i++) {
         const blend_st *b = &s->blend[i];
         en[i] = (s->color.blend_en >> i & 1) && blendable(target_format(s->color_fmt[i], NULL, NULL));
@@ -1146,9 +1110,83 @@ void vk_pipeline_set_dynamic(VkCommandBuffer cb, const VkPipeState *s) {
                                           blend_factor(b->src_a), blend_factor(b->dst_a), blend_op(b->eq_a)};
         wm[i] = target_wmask(s, i);
     }
-    if (P.dyn_blend_en) rec_blend_enable(P.set_blend_en, cb, 0, (uint32_t)n, en);
-    if (P.dyn_blend_eq) rec_blend_equation(P.set_blend_eq, cb, 0, (uint32_t)n, eq);
-    if (P.dyn_wmask) rec_write_mask(P.set_wmask, cb, 0, (uint32_t)n, wm);
+}
+
+static unsigned offset_enabled(const poly_st *pl) {
+    // NVN_POLYGON_OFFSET_ENABLE_* bit of the polygon mode in use: point 1, line 2, fill 4
+    unsigned mode = pl->mode <= NVN_POLYGON_MODE_FILL ? pl->mode : NVN_POLYGON_MODE_FILL;
+    return pl->offset_en >> mode & 1;
+}
+
+// last: the state this command buffer's dynamic state was set from (vk_exec_draw.c keeps it across pipeline binds, as
+// every graphics pipeline lists the same dynamic states, P.dyn); each vkCmdSet* is recorded only when its value
+// differs from what last gave. NULL: all of them. A race frame on the Steam Deck (1.8.0 Grand Prix, 2 659 draws) made
+// 19 643 of these calls, of which 1 385 changed a value (MKW_DYN_CENSUS, a test build).
+void vk_pipeline_set_dynamic(VkCommandBuffer cb, const VkPipeState *s, const VkPipeState *last) {
+    if (!ensure_init()) return;
+    // a task/mesh pipeline lists fewer dynamic states (create_mesh): binding one between two others leaves those
+    // undefined, so a change of kind sets them all
+    if (last && mesh_pipe(s) != mesh_pipe(last)) last = NULL;
+    const poly_st *pl = &s->poly, *lp = last ? &last->poly : NULL;
+    const ds_st *d = &s->ds, *ld = last ? &last->ds : NULL;
+#define CHANGED(cond) (!last || (cond))
+    // The front face maps unchanged: TotK sets the upper-left window origin, and the y-flipped viewport (y_flip) puts
+    // NDC +y at row 0 as NVN does, so the framebuffer winding Vulkan tests is the one NVN tests (MacNativeGames passes
+    // it to Metal unchanged; LAS Recomp exec.c mirrors it only for the lower-left origin).
+    int front_cw = pl->front == NVN_FRONT_FACE_CW;
+    if (CHANGED((pl->cull & 3) != (lp->cull & 3)))
+        vkCmdSetCullMode(cb, (VkCullModeFlags)(pl->cull & 3));   // NVN_FACE_* has VkCullModeFlagBits' values
+    if (CHANGED(front_cw != (lp->front == NVN_FRONT_FACE_CW)))
+        vkCmdSetFrontFace(cb, front_cw ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE);
+    if (CHANGED(vk_pipeline_topology(s->prim) != vk_pipeline_topology(last->prim)))
+        vkCmdSetPrimitiveTopology(cb, vk_pipeline_topology(s->prim));
+    if (CHANGED(d->dt != ld->dt)) vkCmdSetDepthTestEnable(cb, d->dt);
+    if (CHANGED(d->dw != ld->dw)) vkCmdSetDepthWriteEnable(cb, d->dw);
+    if (CHANGED(compare_op(d->df) != compare_op(ld->df))) vkCmdSetDepthCompareOp(cb, compare_op(d->df));
+    if (CHANGED(d->st != ld->st)) vkCmdSetStencilTestEnable(cb, d->st);
+    if (CHANGED(d->fail_f != ld->fail_f || d->zpass_f != ld->zpass_f || d->zfail_f != ld->zfail_f || d->sf_f != ld->sf_f))
+        vkCmdSetStencilOp(cb, VK_STENCIL_FACE_FRONT_BIT, stencil_op(d->fail_f), stencil_op(d->zpass_f),
+                          stencil_op(d->zfail_f), compare_op(d->sf_f));
+    if (CHANGED(d->fail_b != ld->fail_b || d->zpass_b != ld->zpass_b || d->zfail_b != ld->zfail_b || d->sf_b != ld->sf_b))
+        vkCmdSetStencilOp(cb, VK_STENCIL_FACE_BACK_BIT, stencil_op(d->fail_b), stencil_op(d->zpass_b),
+                          stencil_op(d->zfail_b), compare_op(d->sf_b));
+    if (CHANGED(offset_enabled(pl) != offset_enabled(lp))) vkCmdSetDepthBiasEnable(cb, offset_enabled(pl) != 0);
+    if (CHANGED((s->raster_discard != 0) != (last->raster_discard != 0)))
+        vkCmdSetRasterizerDiscardEnable(cb, s->raster_discard != 0);
+    if (CHANGED((s->prim_restart != 0) != (last->prim_restart != 0)))
+        vkCmdSetPrimitiveRestartEnable(cb, s->prim_restart != 0);
+    // vertex_input reads the vertex shader's inputs, vattr and vstream: equal ones give the same description; other
+    // ones may too (another shader with the same inputs), compared on the descriptions themselves
+    if (P.dyn_vi && s->vs &&
+        CHANGED(last->vs != s->vs || memcmp(s->vattr, last->vattr, sizeof s->vattr) ||
+                memcmp(s->vstream, last->vstream, sizeof s->vstream))) {
+        VtxInput v, lv;
+        vertex_input(s, &v);   // it clears *v first
+        int same = 0;
+        if (last && last->vs) vertex_input(last, &lv), same = !memcmp(&v, &lv, sizeof v);
+        if (!same) rec_vertex_input(P.set_vi, cb, v.n_bind, v.b, v.n_attr, v.a);
+    }
+    if (P.dyn_clamp && CHANGED((s->depth_clamp != 0) != (last->depth_clamp != 0)))
+        rec_bool(P.set_clamp, cb, s->depth_clamp != 0);
+    if (P.dyn_poly && CHANGED(pl->mode != lp->mode)) rec_polygon_mode(P.set_poly, cb, polygon_mode(pl->mode));
+    if (P.dyn_a2c && CHANGED((s->ms.a2c != 0) != (last->ms.a2c != 0)))
+        rec_bool((PFN_vkCmdSetDepthClampEnableEXT)P.set_a2c, cb, s->ms.a2c != 0);   // the same signature
+    int n = target_count(s);
+    if (!n) return;
+    VkBool32 en[8];
+    VkColorBlendEquationEXT eq[8];
+    VkColorComponentFlags wm[8];
+    blend_arrays(s, n, en, eq, wm);
+    // the last state's targets: a target it did not have was never set, so a count above its own sets them all
+    int ln = last ? target_count(last) : 0;
+    VkBool32 len[8];
+    VkColorBlendEquationEXT leq[8];
+    VkColorComponentFlags lwm[8];
+    if (ln >= n) blend_arrays(last, n, len, leq, lwm);
+    if (P.dyn_blend_en && (ln < n || memcmp(en, len, n * sizeof *en))) rec_blend_enable(P.set_blend_en, cb, 0, (uint32_t)n, en);
+    if (P.dyn_blend_eq && (ln < n || memcmp(eq, leq, n * sizeof *eq))) rec_blend_equation(P.set_blend_eq, cb, 0, (uint32_t)n, eq);
+    if (P.dyn_wmask && (ln < n || memcmp(wm, lwm, n * sizeof *wm))) rec_write_mask(P.set_wmask, cb, 0, (uint32_t)n, wm);
+#undef CHANGED
 }
 
 // ---- statistics, persistence, teardown

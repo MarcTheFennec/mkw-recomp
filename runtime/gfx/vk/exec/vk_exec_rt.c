@@ -73,6 +73,13 @@ static void resolve_target(const tex_t *t, const view_t *v, int has_v, int depth
             rt_log("vk: render target format %#x target %d (%ux%u, %s) left out: %s (usage %#x, type %d)", t->d.format,
                    t->d.target, t->d.width, t->d.height, depth_slot ? "depth" : "colour", whys[why],
                    img ? (unsigned)img->usage : 0, img ? (int)img->type : -1);
+            // The one case the GFX9 guard causes (vk_tex_image.c): that volume cannot carry COLOR_ATTACHMENT on RADV
+            // before RDNA without addrlib raising SIGTRAP at its creation, so the draw is lost here — named once with
+            // its shape, not silently, so a run says whether the game ever draws into one (it crashes there otherwise).
+            if (why == 1 && img && img->block_ca_skipped)   // once per shape, as the line above
+                rt_log("vk: render target format %#x (%ux%u, 3D volume with %u levels) left out: RADV on GFX9 makes one "
+                       "without COLOR_ATTACHMENT (vk_tex_gfx9.c), the draw writes nothing", t->d.format, t->d.width,
+                       t->d.height, img->levels);
         }
         return;
     }

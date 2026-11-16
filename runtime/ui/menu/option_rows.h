@@ -1,7 +1,9 @@
 // Settings pages in two panes (ui/menu/option_rows.cpp): option rows on the left, the selected (controller) or hovered (mouse)
-// row's description on the right. Each row shows a setting of the cfg table (cfg.h) and changes it through cfg_set: A or
-// a click steps it (toggle, next value), left and right step it. A row marks the default value, says "after restart" when
-// the setting is read at start, and is greyed out with a note when an environment variable fixes it.
+// row's description on the right (whichever the player used last: the mouse's row or the cursor's, never both). Each
+// row shows a setting of the cfg table (cfg.h) and changes it through cfg_set: A or a click steps it (toggle, next
+// value), left and right step it. A row marks the default value, says "after restart" when the setting is read at start
+// (the in-game menu; the start screen marks a changed value instead, OptLook::quiet), and is greyed out with a note
+// when an environment variable fixes it.
 //
 //   opt_begin("##screen", scale);
 //   opt_toggle("MKW_FULLSCREEN", UI_MENU_FULLSCREEN, UI_MENU_FULLSCREEN_DESC);
@@ -29,6 +31,10 @@ struct OptLook {
     ImU32 cell_off;             // the border of a binding cell that takes no input
     ImU32 group, warn;          // opt_group's heading, opt_text's warning
     float radius;               // a row's corners, at 1080 lines
+    // The start screen: no "default" or "after restart" notes (everything there applies when the game starts); a value
+    // that is not the default is drawn bright with a dot of changed after its label, a default one dim.
+    bool quiet;
+    ImU32 changed;
 };
 // The rows' look from now on; NULL: the in-game menu's. Kept by pointer: l must outlive the rows drawn with it.
 void opt_look(const OptLook *l);
@@ -43,6 +49,8 @@ void opt_focus_first(void);
 void opt_focus_key(const char *key);
 // The next row is greyed out like one the environment fixes, with note under its label and in its description.
 void opt_disable_next(UiTextId note);
+// The rows from now on hang indented under the one before (a preset's rows), until opt_indent(false) or the page's end.
+void opt_indent(bool on);
 
 // Page text that is not a row: a group heading in the accent colour, a wrapped paragraph (warn: the warning colour).
 void opt_group(UiTextId title);

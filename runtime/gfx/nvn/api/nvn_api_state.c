@@ -33,6 +33,7 @@ NVN_API(nvnCommandBufferSetRenderTargets) {
     }
     r->depth = cmd_tex_pin(dt);
     cmd_copy_view(&r->dview, &r->has_dview, dv);
+    nvn_dstk_rt(r->depth ? r->depth->mem : NULL);
 }
 // void nvnCommandBufferClearColor(NVNcommandBuffer *cmd, int index, const float *rgba, int mask)
 NVN_API(nvnCommandBufferClearColor) {
@@ -280,6 +281,7 @@ NVN_API(nvnCommandBufferSetPolygonOffsetClamp) {
 // method 0xea2 (sdk+0x5e2e80), the DrawMeshTasksNV model.
 NVN_API(nvnCommandBufferDrawMeshTasks) {
     int first = (int)arg_x(c, 1), count = (int)arg_x(c, 2);
+    nvn_dstk_draw(c);
     if (count > 0) *REC(cmd_of(c), OP_DRAW_MESH, p_draw_mesh) = (p_draw_mesh){first, count};
     if (rt_trace & RT_TRACE_PERF) {   // task groups per draw: sizes the buffers of mesh-as-compute
         static uint64_t n, sum, max;
@@ -289,12 +291,14 @@ NVN_API(nvnCommandBufferDrawMeshTasks) {
     }
 }
 NVN_API(nvnCommandBufferDrawArrays) {
+    nvn_dstk_draw(c);
     *REC(cmd_of(c), OP_DRAW, p_draw) = (p_draw){(int)arg_x(c, 1), (int)arg_x(c, 2), (int)arg_x(c, 3), 0, 1};
 }
 // void nvnCommandBufferDrawArraysInstanced(NVNcommandBuffer *cmd, NVNdrawPrimitive prim, int first, int count,
 // int base_instance, int instances): zero instances draw nothing
 NVN_API(nvnCommandBufferDrawArraysInstanced) {
     int inst = (int)arg_x(c, 5);
+    nvn_dstk_draw(c);
     if (inst <= 0) return;
     *REC(cmd_of(c), OP_DRAW, p_draw) = (p_draw){(int)arg_x(c, 1), (int)arg_x(c, 2), (int)arg_x(c, 3), (int)arg_x(c, 4), inst};
 }
@@ -302,12 +306,14 @@ NVN_API(nvnCommandBufferDrawArraysInstanced) {
 // NVNbufferAddress indices)
 NVN_API(nvnCommandBufferDrawElements) {
     cmd_t *o = cmd_of(c);
+    nvn_dstk_draw(c);
     *REC(o, OP_DRAW_IDX, p_draw_idx) = (p_draw_idx){(int)arg_x(c, 1), (int)arg_x(c, 2), (int)arg_x(c, 3), 0, 0, 1, arg_x(c, 4)};
     cmd_hw_fix(o, 48);
 }
 // void nvnCommandBufferDrawElementsBaseVertex(..., NVNbufferAddress indices, int base_vertex)
 NVN_API(nvnCommandBufferDrawElementsBaseVertex) {
     cmd_t *o = cmd_of(c);
+    nvn_dstk_draw(c);
     *REC(o, OP_DRAW_IDX, p_draw_idx) =
         (p_draw_idx){(int)arg_x(c, 1), (int)arg_x(c, 2), (int)arg_x(c, 3), (int)arg_x(c, 5), 0, 1, arg_x(c, 4)};
     cmd_hw_fix(o, 44);
@@ -316,6 +322,7 @@ NVN_API(nvnCommandBufferDrawElementsBaseVertex) {
 // int instances): assumed to use the 6-parameter draw macro of the base-vertex form (unverified)
 NVN_API(nvnCommandBufferDrawElementsInstanced) {
     cmd_t *o = cmd_of(c);
+    nvn_dstk_draw(c);
     *REC(o, OP_DRAW_IDX, p_draw_idx) = (p_draw_idx){(int)arg_x(c, 1), (int)arg_x(c, 2), (int)arg_x(c, 3),
                                                     (int)arg_x(c, 5), (int)arg_x(c, 6), (int)arg_x(c, 7), arg_x(c, 4)};
     cmd_hw_fix(o, 44);
@@ -324,6 +331,7 @@ NVN_API(nvnCommandBufferDrawElementsInstanced) {
 // NVNbufferAddress indices, NVNbufferAddress indirect): the arguments at indirect are often GPU-written, so the replay
 // draws with vkCmdDrawIndexedIndirect from the pool buffer (nxnative hle_nvn.c, SavageWindRecomp cmdbuf.c)
 NVN_API(nvnCommandBufferDrawElementsIndirect) {
+    nvn_dstk_draw(c);
     *REC(cmd_of(c), OP_DRAW_IDX_IND, p_draw_idx_ind) = (p_draw_idx_ind){(int)arg_x(c, 1), (int)arg_x(c, 2), arg_x(c, 3), arg_x(c, 4)};
 }
 // void nvnCommandBufferClearColori(NVNcommandBuffer *cmd, int index, const int *rgba, int mask): the bits go through
@@ -338,6 +346,7 @@ NVN_API(nvnCommandBufferClearColori) {
 // MultiDrawArraysIndirectCount(cmd, prim, indirect, count, int max_draws, ptrdiff_t stride): OP_DRAW_IDX_IND without
 // indices (itype -1)
 NVN_API(nvnCommandBufferDrawArraysIndirect) {
+    nvn_dstk_draw(c);
     *REC(cmd_of(c), OP_DRAW_IDX_IND, p_draw_idx_ind) = (p_draw_idx_ind){(int)arg_x(c, 1), -1, 0, arg_x(c, 2)};
 }
 NVN_API(nvnCommandBufferMultiDrawArraysIndirectCount) {

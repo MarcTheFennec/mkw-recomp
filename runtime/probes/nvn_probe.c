@@ -837,7 +837,7 @@ static void probe_queue_order(void) {
     enum { OFF_E = 0x600, OFF_F = 0x640, OFF_Z = 0x700, OFF_R1 = 0x710, OFF_R2 = 0x720, OFF_C = 0x730 };
     static const uint8_t bb[8] = {0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb}, cc[8] = {0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc};
     uint64_t base = U(pmem);
-    plat_setenv("MKW_QUEUE_WAITS", "1");   // (off by default; read on first use, which is here)
+    plat_setenv("MKW_QUEUE_WAITS", "1");   // (the default; read on first use, which is here)
     memset(pmem + OFF_E, 0, 0x140);
     CALL(nvnEventBuilderSetStorage, U(&evb), U(&pool), OFF_E);
     CHECK((uint8_t)CALL(nvnEventInitialize, U(&evE), U(&evb)) == 1, "EventInitialize E");

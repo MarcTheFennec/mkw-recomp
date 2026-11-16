@@ -64,9 +64,25 @@ int plat_mem_state(uint64_t addr, uint64_t limit, uint64_t *end) {
 
 // Adapted from LAS Recomp runtime/platform/windows.c:40-63 @ da35b83 (MIT, Copyright (c) 2026 Peiikai): GetWriteWatch
 // with the reset flag.
+// The committed, readable runs of [addr, addr + n): Linux lists the pages that hold data (PAGEMAP_SCAN), Windows has
+// no such query, but the guest's memory is committed when first touched (plat_mem_lazy_hook), so a committed page is
+// one the game or the runtime used. A committed page never written reads as zeros, as a Linux page never touched. It
+// lets the frame capture (gfx/cap) run on Windows.
 uint64_t plat_mem_populated(uint64_t addr, uint64_t n, uint64_t (*runs)[2], uint64_t max) {
-    (void)addr, (void)n, (void)runs, (void)max;
-    return UINT64_MAX;
+    uint64_t got = 0;
+    for (uint64_t at = addr, end = addr + n; at < end && got < max;) {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (!VirtualQuery((void *)(uintptr_t)at, &mbi, sizeof mbi)) return UINT64_MAX;
+        uint64_t next = (uint64_t)(uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+        if (next > end) next = end;
+        DWORD p = mbi.Protect & 0xff;
+        if (mbi.State == MEM_COMMIT && !(mbi.Protect & PAGE_GUARD) && (p == PAGE_READWRITE || p == PAGE_READONLY)) {
+            if (got && runs[got - 1][1] == at) runs[got - 1][1] = next;
+            else runs[got][0] = at, runs[got][1] = next, got++;
+        }
+        at = next;
+    }
+    return got;
 }
 
 uint64_t plat_mem_written(uint64_t addr, uint64_t n, uint64_t *pages, uint64_t max, int reset) {

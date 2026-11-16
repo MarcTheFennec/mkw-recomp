@@ -26,10 +26,24 @@ def translator_key() -> str:
     return h.hexdigest()[:16]
 
 
+def spec_loads(spec: Path) -> bool:
+    """Whether the decoder accepts this spec (0.3 s). Until 0.1.12 a capture the parser rejected still left its
+    instructions.json behind, and every later setup failed on it in translate.py (issue #325)."""
+    sys.path.insert(0, str(ROOT / "sm86/decode"))
+    import sass_spec  # noqa: PLC0415 - sm86/decode is not a package
+
+    try:
+        sass_spec.Spec(str(spec))
+    except (ValueError, KeyError, TypeError) as e:
+        print(f"{spec} is broken ({type(e).__name__}: {str(e)[:200]}): building it again", flush=True)
+        return False
+    return True
+
+
 def sm86_spec(game: Path, work: Path, cc: list[str]) -> Path:
     """The spec translate.py decodes with: a source checkout's own build/sm86, else built once into <game>/sm86."""
     for spec in (ROOT / "build/sm86/instructions.json", game / "sm86/instructions.json"):
-        if spec.is_file():
+        if spec.is_file() and spec_loads(spec):
             return spec
     crt = crt_spec(game, cc)  # spec.py links a DLL too on Windows: without it, zig builds its libc there (issue #2)
     run(spec_command(game, work, cc, crt))

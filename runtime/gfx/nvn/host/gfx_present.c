@@ -269,20 +269,23 @@ static VkPresentModeKHR pick_present_mode(VkPhysicalDevice pd) {
 
 const char *gfx_window_present_mode(void) { return __atomic_load_n(&g_present_got, __ATOMIC_ACQUIRE); }
 
-// Queues the oldest present a blit left waiting (g_pl held).
-static void flip_one_locked(void) {
-    if (!g_flip_n) return;
+// Queues the oldest present a blit left waiting (g_pl held). Returns its present id (MKW_LATENCY), else 0.
+static uint64_t flip_one_locked(void) {
+    if (!g_flip_n) return 0;
     uint32_t idx = g_flip_q[0];
     g_flip_n--;
     memmove(g_flip_q, g_flip_q + 1, (size_t)g_flip_n * sizeof *g_flip_q);
-    if (!g_sc) return;
-    VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, .waitSemaphoreCount = 1,
-                           .pWaitSemaphores = &g_render_done[idx], .swapchainCount = 1, .pSwapchains = &g_sc,
-                           .pImageIndices = &idx};
+    if (!g_sc) return 0;
+    uint64_t id = vk_lat_next_id();
+    VkPresentIdKHR pid = {.sType = VK_STRUCTURE_TYPE_PRESENT_ID_KHR, .swapchainCount = 1, .pPresentIds = &id};
+    VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, .pNext = id ? &pid : NULL,
+                           .waitSemaphoreCount = 1, .pWaitSemaphores = &g_render_done[idx], .swapchainCount = 1,
+                           .pSwapchains = &g_sc, .pImageIndices = &idx};
     vk_queue_lock();
     VkResult r = vkQueuePresentKHR(vk_ctx()->gfx_queue, &pi);
     vk_queue_unlock();
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) plat_xchg32(&g_dirty, 1);
+    return id;
 }
 
 // Queues every waiting present (g_pl held). A swapchain rebuild and the next blit (not an ahead one) flush them first;
@@ -348,7 +351,9 @@ static int create_swapchain(void) {
         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE, .preTransform = caps.currentTransform,
         .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, .presentMode = pick_present_mode(c->phys), .clipped = VK_TRUE,
         .oldSwapchain = old};
+    vk_lat_swapchain(1, VK_NULL_HANDLE);   // MKW_LATENCY: no present wait on the swapchain this retires
     VkResult r = vkCreateSwapchainKHR(c->device, &ci, NULL, &g_sc);
+    vk_lat_swapchain(0, r == VK_SUCCESS ? g_sc : old);
     if (r != VK_SUCCESS) {
         rt_log("gfx: vkCreateSwapchainKHR failed (%d)", (int)r);
         g_sc = old;
@@ -643,7 +648,11 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     if (cy + ch > h) ch = h - cy;
     // A full-screen movie (the cups') on an ultrawide output (MKW_ASPECT): its middle 16:9 between black bars, as the
     // console shows it; the 2D keeps the movie there (patches.c host_ui_proj)
-    if (g_aspect && ov_movie_playing() && ch * 16 / 9 < cw) cx += (cw - ch * 16 / 9) / 2, cw = ch * 16 / 9;
+    int movie = g_aspect && ov_movie_playing() && ch * 16 / 9 < cw;
+    if (movie) cx += (cw - ch * 16 / 9) / 2, cw = ch * 16 / 9;
+    // The picture's shape is MKW_ASPECT's, not the crop's: 1.8.0 draws the tall Window's picture (a camera of 1.600 in
+    // a 16:9 buffer) at 2560x1440 and crops to it, where 1.0.0 scales it to the whole 1280x800 output itself
+    int fit_w = g_aspect && !movie ? (int)(ch * g_aspect + 0.5f) : cw;
     window_settings_live();
     // The menu overlay: laid out before recording (its first frame starts the ImGui back end and uploads the font)
     const char *menu_shot = NULL;
@@ -669,7 +678,7 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
     const int rect[4] = {cx, cy, cw, ch};
     int to[4];   // where the picture goes in the swapchain image: {x, y, w, h}
-    gfx_fit_rect(cw, ch, (int)g_sc_vis.width, (int)g_sc_vis.height, to);
+    gfx_fit_rect(fit_w, ch, (int)g_sc_vis.width, (int)g_sc_vis.height, to);
     if (!src || to[2] != (int)g_sc_ext.width || to[3] != (int)g_sc_ext.height) {   // black bars, or all black
         VkClearColorValue black = {.float32 = {0, 0, 0, 1}};
         VkImageSubresourceRange all = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
@@ -810,10 +819,11 @@ void vk_present_blit_ahead(VkImage src, VkImageLayout layout, VkFormat fmt, int 
 
 int vk_present_ahead_max(void) { return __atomic_load_n(&g_ahead, __ATOMIC_RELAXED); }
 
-void vk_present_flip(void) {
+uint64_t vk_present_flip(void) {
     plat_rmutex_lock(&g_pl);
-    flip_one_locked();
+    uint64_t id = flip_one_locked();
     plat_rmutex_unlock(&g_pl);
+    return id;
 }
 
 void gfx_window_resize(int cw, int chh) {
@@ -849,7 +859,9 @@ void gfx_window_release_vk(void) {
             g_sc_view[i] = VK_NULL_HANDLE;
         }
         if (g_pool) vkDestroyCommandPool(c->device, g_pool, NULL);
+        vk_lat_swapchain(1, VK_NULL_HANDLE);
         if (g_sc) vkDestroySwapchainKHR(c->device, g_sc, NULL);
+        vk_lat_swapchain(0, VK_NULL_HANDLE);
         if (g_surface) vkDestroySurfaceKHR(c->instance, g_surface, NULL);
         g_sc = VK_NULL_HANDLE; g_surface = VK_NULL_HANDLE; g_pool = VK_NULL_HANDLE; g_sc_n = 0;
         g_started = 0;     // the window and its thread stay; the next gfx_window_start makes a new surface

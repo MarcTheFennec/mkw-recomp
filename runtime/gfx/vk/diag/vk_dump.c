@@ -47,6 +47,7 @@
 // course already fills (run101-run102: every large target "host buffer allocation failed"), and a run without the
 // limit took the GPU's memory from the desktop too (run103: kwin's submissions failed). INFLIGHT_CAP bounds this one.
 static VmaAllocator dvma_;
+static PlatOnce dvma_once = PLAT_ONCE_INIT;
 
 static void dvma_init(void *arg) {
     (void)arg;
@@ -57,9 +58,15 @@ static void dvma_init(void *arg) {
 }
 
 VmaAllocator dvma(void) {
-    static PlatOnce once = PLAT_ONCE_INIT;
-    plat_once(&once, dvma_init, NULL);
+    plat_once(&dvma_once, dvma_init, NULL);
     return dvma_;
+}
+
+// Completion callbacks and rtstats workers no longer hold readback buffers.
+void vk_dump_shutdown(void) {
+    if (dvma_) vmaDestroyAllocator(dvma_);
+    dvma_ = NULL;
+    dvma_once = (PlatOnce)PLAT_ONCE_INIT;
 }
 #define MAX_ENTS 48                 // distinct pipeline + texture sets listed per pass
 #define MAX_LUTS 256                // 3D textures and small sampled 8-bit 2D textures dumped per frame

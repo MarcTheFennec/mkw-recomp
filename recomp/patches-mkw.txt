@@ -206,3 +206,9 @@ site seed main abdbf0 9475b5e0 94a54cf0   # same
 site seed main b15488 947457ba 94a3eeca   # same
 site seed main c006e0 9470ab24 94a04234   # same
 site seed main 15585a4 944b4b73 947ae283   # same
+
+# Race FOV after aspect assignment and before its half-angle caches are stored (1.0.0 only).
+# The projection update (225a84, including its inlined path) and frustum read the same corrected fields.
+# Separate set: an old game table must not enable tall output without this hook.
+set vertplus MKW_VERTPLUS_PATCH 0
+site vertplus main 45fba4 1e2d0808 94bec4e3   # fmul s8, s0, s13 -> bl host_camera_fov (page + 0xf30)

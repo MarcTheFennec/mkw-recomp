@@ -16,6 +16,10 @@ fi
 if [ "${RACE_TT:-0}" = 1 ]; then
   # MKW_SEED fixes the course (the map's first cursor follows the clock: tt6a/b loaded the same world tiles)
   export MKW_QUICK_RACE=tt MKW_SEQ_UNTIL=${MKW_SEQ_UNTIL-ReadyRace} MKW_SEED=${MKW_SEED-1}
+# RACE_GP=1: a Grand Prix by phases (MKW_QUICK_RACE=gp): 24 karts, the save's last cup; the kart drives with the
+# save's Smart Steering and Auto-Accelerate, else A is held (into the walls). Measured from ReadyRace.
+elif [ "${RACE_GP:-0}" = 1 ]; then
+  export MKW_QUICK_RACE=gp MKW_SEQ_UNTIL=${MKW_SEQ_UNTIL-ReadyRace} MKW_SEED=${MKW_SEED-1}
 else
   export MKW_INPUT_SCRIPT=${MKW_INPUT_SCRIPT:-tools/run/press-race.txt}
 fi

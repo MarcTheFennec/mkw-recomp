@@ -23,6 +23,8 @@
 #include <sys/prctl.h>
 #include <sys/random.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
@@ -294,6 +296,60 @@ int plat_random(void *out, size_t n) {
         p += k, n -= (size_t)k;
     }
     return 1;
+}
+
+// ---- local IPC: a Unix stream socket. Reads with MSG_DONTWAIT, writes with MSG_NOSIGNAL (a closed peer is an error,
+// not SIGPIPE).
+
+struct PlatIpc { int fd; };
+
+PlatIpc *plat_ipc_open(const char *name) {
+    const char *dirs[4] = {getenv("XDG_RUNTIME_DIR"), getenv("TMPDIR"), getenv("TMP"), "/tmp"};
+    static const char *const subs[] = {"", "app/com.discordapp.Discord/", "snap.discord/"};
+    for (size_t d = 0; d < 4; d++) {
+        if (!dirs[d] || !*dirs[d]) continue;
+        for (size_t s = 0; s < sizeof subs / sizeof *subs; s++) {
+            struct sockaddr_un a = {.sun_family = AF_UNIX};
+            int n = snprintf(a.sun_path, sizeof a.sun_path, "%s/%s%s", dirs[d], subs[s], name);
+            if (n <= 0 || (size_t)n >= sizeof a.sun_path) continue;
+            int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+            if (fd < 0) return NULL;
+            if (!connect(fd, (struct sockaddr *)&a, sizeof a)) {
+                PlatIpc *c = malloc(sizeof *c);
+                if (!c) return close(fd), NULL;
+                c->fd = fd;
+                return c;
+            }
+            close(fd);
+        }
+    }
+    return NULL;
+}
+
+int plat_ipc_send(PlatIpc *c, const void *data, size_t n) {
+    for (const char *p = data; n;) {
+        ssize_t r = send(c->fd, p, n, MSG_NOSIGNAL);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) return 0;
+        p += r, n -= (size_t)r;
+    }
+    return 1;
+}
+
+long plat_ipc_recv(PlatIpc *c, void *buf, size_t cap) {
+    for (;;) {
+        ssize_t r = recv(c->fd, buf, cap, MSG_DONTWAIT);
+        if (r > 0) return (long)r;
+        if (r == 0) return -1;   // the peer closed
+        if (errno == EINTR) continue;
+        return errno == EAGAIN || errno == EWOULDBLOCK ? 0 : -1;
+    }
+}
+
+void plat_ipc_close(PlatIpc *c) {
+    if (!c) return;
+    close(c->fd);
+    free(c);
 }
 
 // ---- desktop

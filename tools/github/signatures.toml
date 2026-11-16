@@ -10,6 +10,7 @@
 issue = 22
 wiki = "nvidia-device-fault-instruction-pointer-invalid"
 all = ["instruction pointer invalid"]
+fixed = "v0.1.12"
 what = "the GPU faults mid-draw on NVIDIA (\"device fault: instruction pointer invalid\")"
 
 [[signature]]
@@ -62,6 +63,12 @@ issue = 67
 wiki = "upload-submit-failed--2--device-local-allocation-failed-out-of-gpu-memory"
 all = ["upload submit failed (-2)"]
 what = "the driver refuses a submission for lack of GPU memory (`upload submit failed (-2)`) at the title, on an integrated GPU"
+
+[[signature]]
+issue = 443
+wiki = "upload-submit-failed--2--device-local-allocation-failed-out-of-gpu-memory"
+all = ["physical pool chunk", "device-local allocation failed"]
+what = "blocks of the game's GPU memory get no video memory on a 4 GB card and draw wrong (a dark band, flashing colours)"
 
 [[signature]]
 issue = 111
@@ -144,3 +151,30 @@ issue = 315
 wiki = "are-from-different-versions-romfs--crash-in-lifted-function-f_700078ab50"
 all = ["are from different versions (RomFS"]
 what = "`exefs` and `romfs` come from different game versions (the setup now refuses them)"
+
+[[signature]]
+issue = 325
+wiki = "shaders-step-translatepy-failed-with-keyerror-bits_-or-classes-carry-no-opcode-constant"
+all = ["translate.py failed", "KeyError: 'BITS_"]
+fixed = "v0.1.12"
+what = "a garbled capture of NVIDIA's disassembler left a broken shader spec in `sm86/` that every later setup reused"
+
+[[signature]]
+issue = 325
+wiki = "shaders-step-translatepy-failed-with-keyerror-bits_-or-classes-carry-no-opcode-constant"
+all = ["classes carry no Opcode constant"]
+fixed = "v0.1.12"
+what = "a garbled capture of NVIDIA's disassembler left a broken shader spec in `sm86/` that every later setup reused"
+
+[[signature]]
+issue = 426
+wiki = "vkcreateinstance-failed--9-no-vulkan-driver"
+all = ["vkCreateInstance failed (-9)"]
+what = "no Vulkan driver that can draw to a window is installed (the video driver is missing or Windows' basic one)"
+
+[[signature]]
+issue = 14
+wiki = "black-ground-or-terrain"
+all = ["Intel Corporation", "Vulkan block 64x64", "tile slots over MKW_SPARSE_MIB"]
+fixed = "v0.1.13"
+what = "Intel Arc on Windows: the terrain's sparse blocks read in the wrong unit, ground, roads and trees black or missing"

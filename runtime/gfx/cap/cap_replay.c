@@ -50,8 +50,9 @@ static const tex_t *pin(const tex_t *t) {
 static void save_png(const GfxBackend *b, const tex_t *t, const char *path) {
     int fmt = t->d.format;
     int bgra = fmt == NVN_FORMAT_BGRA8 || fmt == NVN_FORMAT_BGRA8_SRGB;
-    if (!bgra && fmt != NVN_FORMAT_RGBA8 && fmt != NVN_FORMAT_RGBA8_SRGB) {
-        rt_log("cap: present of NVN format %#x not saved (8-bit RGBA and BGRA only)", fmt);
+    int rgb10 = fmt == NVN_FORMAT_RGB10A2;
+    if (!bgra && !rgb10 && fmt != NVN_FORMAT_RGBA8 && fmt != NVN_FORMAT_RGBA8_SRGB) {
+        rt_log("cap: present of NVN format %#x not saved (8-bit RGBA, BGRA and RGB10A2 only)", fmt);
         return;
     }
     uint32_t w = t->d.width, h = t->d.height;
@@ -62,7 +63,14 @@ static void save_png(const GfxBackend *b, const tex_t *t, const char *path) {
     NVNcopyRegion r = {.width = (int)w, .height = (int)h, .depth = 1};
     b->finish();
     b->read_texels(t, &view, &r, px, 4ull * w, 4ull * w * h);
-    if (bgra)
+    if (rgb10)
+        // Game 1.8.0 presents RGB10A2 (A2B10G10R10, R in the low bits); PNG is 8-bit, so each channel keeps its top 8.
+        for (uint64_t i = 0; i < 4ull * w * h; i += 4) {
+            uint32_t v;
+            memcpy(&v, px + i, 4);
+            px[i] = (v >> 2) & 0xff, px[i + 1] = (v >> 12) & 0xff, px[i + 2] = (v >> 22) & 0xff;
+        }
+    else if (bgra)
         for (uint64_t i = 0; i < 4ull * w * h; i += 4) {
             uint8_t x = px[i];
             px[i] = px[i + 2], px[i + 2] = x;
@@ -128,12 +136,12 @@ int cap_replay_main(int argc, char **argv) {
     uint8_t *buf = NULL;
     // Time per record type, from its start to the next one's (reading and decompressing included): what a replay's
     // 7-22 s of state are made of.
-    uint64_t type_ns[CAP_SPARSE + 1] = {0}, type_n[CAP_SPARSE + 1] = {0}, t_rec = plat_now_ns();
-    uint32_t prev = 0;
+    uint64_t type_ns[CAP_LAST + 1] = {0}, type_n[CAP_LAST + 1] = {0}, t_rec = plat_now_ns();
+    uint32_t prev = 0, wimg_skipped = 0;
     for (int seen_submit = 0; cap_in_next(in, &h);) {
         uint64_t now = plat_now_ns();
         if (prev) type_ns[prev] += now - t_rec;
-        prev = h.type <= CAP_SPARSE ? h.type : 0, t_rec = now;
+        prev = h.type <= CAP_LAST ? h.type : 0, t_rec = now;
         if (prev) type_n[prev]++;
         if (h.size > bufcap) {
             bufcap = h.size;
@@ -315,6 +323,19 @@ int cap_replay_main(int argc, char **argv) {
             b->write_texels(&w.t, w.has_view ? &w.v : NULL, &w.r, buf, w.row, w.img);
             break;
         }
+        case CAP_WIMG: {
+            CapWimg w;
+            cap_in_read(in, &w, sizeof w);
+            cap_in_read(in, buf, w.bytes);
+            // The image here is made by this build's rules; with another ASTC setting or GPU than the capture's it has
+            // another format and stays as the back end leaves it (the texture then replays as its storage decodes).
+            if (!vk_texture_decoded_copy(&w.t, (VkFormat)w.format, w.level, w.layer, w.nlayers, buf, w.bytes, 1) &&
+                !wimg_skipped++)
+                rt_log("cap: a decoded ASTC image of the capture (%ux%u, VkFormat %u) has another format or size "
+                       "here (another MKW_ASTC_* setting or GPU): left as its storage decodes", w.t.d.width,
+                       w.t.d.height, w.format);
+            break;
+        }
         case CAP_GWRITTEN: {
             uint64_t a[2];
             cap_in_read(in, a, sizeof a);
@@ -353,9 +374,9 @@ int cap_replay_main(int argc, char **argv) {
     vk_exec_par_log();   // how many submissions went in chunks: a replay that never chunks compares serial with serial
     static const char *const names[] = {"", "meta", "mem", "zero", "pool init", "pool fini", "mapv", "texreg", "sampreg",
                                         "texrel", "progrel", "submit", "present", "wtex", "gwritten", "finish", "frame",
-                                        "end", "gpumem", "sparse"};
+                                        "end", "gpumem", "sparse", "wimg"};
     char times[512] = "";
-    for (int t = 1, o = 0; t <= CAP_SPARSE && o < (int)sizeof times - 40; t++)
+    for (int t = 1, o = 0; t <= CAP_LAST && o < (int)sizeof times - 40; t++)
         if (type_ns[t] >= 100000000)   // 0.1 s or more
             o += snprintf(times + o, sizeof times - (size_t)o, " %s %.1f s (%llu)", names[t], (double)type_ns[t] / 1e9,
                           (unsigned long long)type_n[t]);

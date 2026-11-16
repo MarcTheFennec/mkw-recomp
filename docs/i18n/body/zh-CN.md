@@ -37,8 +37,8 @@ PC 程序。你需要自己的游戏副本，并从你自己的主机中导出�
 
 ## 性能
 
-实测的帧时间及其日期见 [docs/performance.md](docs/performance.md)。要添加你的机器，请提交一份
-[性能报告](https://github.com/adriadam10/mkw-recomp/issues/new?template=performance.yml)：它会以报告日期加入表格。这些时间是
+实测的帧时间及其所用版本见 [docs/performance.md](docs/performance.md)。要添加你的机器，请提交一份
+[性能报告](https://github.com/adriadam10/mkw-recomp/issues/new?template=performance.yml)：它会以报告中的版本加入表格。这些时间是
 游戏自身的帧：插帧会显示更多帧，但不会缩短它们。16.7 ms 即 60 fps；帧率设为自动（与主机相同）时，达不到 60 会降到
 30 fps，而超过 33.3 ms 的帧会让比赛慢于实时。
 

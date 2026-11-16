@@ -50,8 +50,10 @@ const GfxShader *gfx_shader_int_variant(const GfxShader *s, const GfxShaderAnswe
 // (int_input_variant, int_output_variant); NULL when it cannot. The words are malloc'd.
 uint32_t *spirv_int_io(const uint32_t *w, uint64_t n, uint32_t umask, uint32_t smask, uint32_t sc, uint64_t *out_n);
 // gfx_spirv_img.c: w with the image bindings in umask / smask retyped to uint / int images (int_image_variant); NULL
-// when it cannot (logged by the caller). The words are malloc'd.
-uint32_t *spirv_int_images(const uint32_t *w, uint64_t n, uint64_t umask, uint64_t smask, uint64_t *out_n);
+// when it cannot (logged by the caller). The words are malloc'd. why, when supplied, receives a static failure reason;
+// out_n is zero on failure. Neither diagnostic changes the input module.
+uint32_t *spirv_int_images(const uint32_t *w, uint64_t n, uint64_t umask, uint64_t smask, uint64_t *out_n,
+                           const char **why);
 uint64_t gfx_shader_count(void);                           // shaders in memory (MKW_TRACE=perf, flight recorder)
 const uint8_t *gfx_shader_key(const GfxShader *s);          // the 32-byte cache key (program key; variants their own)
 const uint8_t *gfx_shader_input_id(const GfxShader *s);     // the 32-byte id in pipeline key records: the program key

@@ -3,6 +3,14 @@
 // (RGBA8), as Ryujinx does with EnableTextureRecompression (it encodes BC7 on the CPU). Endpoints: the block's
 // bounding segment along its principal axis (power iteration on the covariance), then the p-bit that fits best.
 // Bit layout: Khronos Data Format Specification 1.3, BC7 section (mode 6).
+//
+// Alpha 0 is kept exact. Mode 6 has one p-bit per endpoint for all four channels, so an endpoint cannot be both RGB 255
+// and alpha 0 (odd and even): with every channel weighed alike, the fully transparent white of UI art kept RGB 255 and
+// took alpha 1/255, and each such quad showed as a faint box once the UI's sRGB curve lifted it (issue #397: a lighter
+// rectangle behind the Grand Prix "OK" banner and the engine-class badges, 1.8.0, 16/11/2026). Where the wanted alpha
+// is 0, its error weighs ZW times a colour channel's, so the colour gives up one level instead. Only there: weighing
+// alpha everywhere also forced alpha 255 on opaque blocks, and 67 of 74 game textures lost colour for it (median
+// -1.28 dB RGBA PSNR, --probe-texpre).
 #version 460
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
@@ -18,6 +26,13 @@ layout(push_constant) uniform Params {
 };
 
 const uint W4[16] = uint[](0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64);
+const float ZW = 8.0;   // above 3: one level of alpha over 0 outweighs one level in each of R, G and B
+
+// Squared error of v against the wanted w, its alpha weighed ZW times where w's alpha is 0.
+float err_of(vec4 v, vec4 w) {
+    vec4 d = (v - w) * (v - w);
+    return d.r + d.g + d.b + d.a * (w.a < 0.5 ? ZW : 1.0);
+}
 
 uvec4 bits_;
 uint at_;
@@ -72,7 +87,7 @@ void main() {
         for (uint pb = 0u; pb < 2u; pb++) {
             uvec4 qq = uvec4(quant(e[j].r, pb), quant(e[j].g, pb), quant(e[j].b, pb), quant(e[j].a, pb));
             vec4 v = vec4(qq * 2u + pb);
-            float err = dot(v - e[j], v - e[j]);
+            float err = err_of(v, e[j]);
             if (err < best) best = err, q[j] = qq, p[j] = pb;
         }
     }
@@ -83,7 +98,7 @@ void main() {
         uint bi = 0u;
         for (uint k = 0u; k < 16u; k++) {
             vec4 v = floor((v0 * float(64u - W4[k]) + v1 * float(W4[k]) + 32.0) / 64.0);
-            float err = dot(v - c[i], v - c[i]);
+            float err = err_of(v, c[i]);
             if (err < best) best = err, bi = k;
         }
         idx[i] = bi;

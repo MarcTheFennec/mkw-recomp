@@ -677,6 +677,52 @@ static int test_rtstats(const GfxBackend *b, uint8_t *guest) {
     return 0;
 }
 
+
+// A sparse virtual pool starts without mapped texels. Its privately backed small mips must not expose an old image's bytes.
+static int test_sparse_tail_zero(const GfxBackend *b) {
+    static uint8_t pixels[64 * 64 * 2 * 4];
+    for (unsigned round = 0; round < 12; round++) {
+        pool_t pool = {.magic = NVN_POOL_MAGIC,
+                      .flags = NVN_MEMORY_POOL_FLAGS_VIRTUAL | NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS | NVN_MEMORY_POOL_FLAGS_GPU_CACHED,
+                      .mem = (uint8_t *)(uintptr_t)(RT_GPU_VA_BASE + 0x10000000ull + round * 0x1000000ull), .size = 0x1000000};
+        CHECK(b->pool_init(&pool), "sparse tail virtual pool init");
+        tex_t t;
+        init_tex(&t, &pool, 0, NVN_FORMAT_RGBA8);
+        t.d.target = NVN_TEXTURE_TARGET_2D_ARRAY;
+        t.d.width = t.d.height = 512, t.d.depth = 2, t.d.levels = 10;
+        t.d.flags = NVN_TEXTURE_FLAGS_SPARSE;
+        nvn_tex_layout(&t.d, &t.L);
+        t.serial = 10000 + round;
+        const VkTexImage *image = vk_texture_get(&t);
+        CHECK(image, "sparse tail probe did not create an image");
+        if (!vk_sparse_is(image->image)) {
+            b->texture_release(&t); b->pool_fini(&pool);
+            puts("probe-vkexec: sparse tail check skipped (sparse images unavailable)");
+            return 0;
+        }
+        view_t v = {.set_levels = 1, .base_level = 3, .nlevels = 1};
+        NVNcopyRegion region = {0, 0, 0, 64, 64, 2};
+        memset(pixels, 0xcd, sizeof pixels);
+        b->read_texels(&t, &v, &region, pixels, 64 * 4, 64 * 64 * 4);
+        int first = -1; unsigned byte = 0;
+        for (unsigned i = 0; i < sizeof pixels; i++) if (pixels[i]) {first = (int)i; byte = pixels[i]; break;}
+        // Poison the tail before releasing it: a later same-size allocation can reuse this device memory.
+        memset(pixels, 0xa5, sizeof pixels);
+        b->write_texels(&t, &v, &region, pixels, 64 * 4, 64 * 64 * 4);
+        b->finish();
+        b->read_texels(&t, &v, &region, pixels, 64 * 4, 64 * 64 * 4);
+        int changed = -1;
+        for (unsigned i = 0; i < sizeof pixels; i++) if (pixels[i] != 0xa5) {changed = (int)i; break;}
+        b->texture_release(&t); b->pool_fini(&pool);
+        for (int k = 0; k < 3; k++) b->submit(NULL, 0);
+        b->finish();
+        CHECK(first < 0, "unwritten sparse tail round %u byte %d is %#x, expected zero", round, first, byte);
+        CHECK(changed < 0, "written sparse tail round %u byte %d was lost", round, changed);
+    }
+    puts("probe-vkexec: sparse tails start at zero across dirty memory reuse");
+    return 0;
+}
+
 int probe_vkexec(void) {
     main_tid = plat_thread_id();
     // The exact colour checks need the plain picture, whatever mkw.ini says: the SDR swapchain (HDR10, MKW_HDR auto on an
@@ -699,6 +745,7 @@ int probe_vkexec(void) {
     if (!bad) bad = test_pitch(b, guest, &pitch_bytes);
     int zero_bytes = 0;
     if (!bad) bad = test_zero(b, guest, &zero_bytes);
+    if (!bad) bad = test_sparse_tail_zero(b);
     int nvnx_bytes = 0, mirror_bytes = 0;
     if (!bad) bad = test_nvnx(b, guest, &nvnx_bytes);
     if (!bad) bad = test_mirror(b, guest, &mirror_bytes);

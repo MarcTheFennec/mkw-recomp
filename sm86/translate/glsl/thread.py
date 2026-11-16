@@ -28,14 +28,30 @@ class ThreadOps:
             raise Unsupported(f"REDUX.{op}")
         self.uses_subgroup = self.uses_arith = True
         a = self.src_u(i, "a")
-        e = f"uint({self.REDUX[op]}(int({a})))" if i.sym("sz") == "S32" else f"{self.REDUX[op]}({a})"
-        return self.dst(i, e)
+        signed = i.sym("sz") == "S32"
+        e = f"uint({self.REDUX[op]}(int({a})))" if signed else f"{self.REDUX[op]}({a})"
+        # Keep the native reduction on 32-lane hosts. Wider subgroups reduce only active lanes of this logical warp;
+        # a subgroup-wide reduction would mix independent NVIDIA warps even though each receives a uniform result.
+        initial = {"SUM": "0u", "AND": "0xffffffffu", "OR": "0u", "XOR": "0u",
+                   "MIN": "0x7fffffffu" if signed else "0xffffffffu",
+                   "MAX": "0x80000000u" if signed else "0u"}[op]
+        combine = {"SUM": "rv + rx", "AND": "rv & rx", "OR": "rv | rx", "XOR": "rv ^ rx",
+                   "MIN": "uint(min(int(rv), int(rx)))" if signed else "min(rv, rx)",
+                   "MAX": "uint(max(int(rv), int(rx)))" if signed else "max(rv, rx)"}[op]
+        return (f"if (gl_SubgroupSize <= 32u) {{ {self.dst(i, e)} }} else {{ "
+                f"uint ra = {a}, rv = {initial}, wmask = warp_ballot(true); "
+                f"for (uint k = 0u; k < 32u; k++) {{ uint rx = warp_shuffle(ra, k); "
+                f"if (((wmask >> k) & 1u) != 0u) rv = {combine}; }} {self.dst(i, 'rv')} }}")
 
     SR: ClassVar[dict[str, str]] = {
         "SR_TID.X": "gl_LocalInvocationID.x", "SR_TID.Y": "gl_LocalInvocationID.y", "SR_TID.Z": "gl_LocalInvocationID.z",
         "SR_CTAID.X": "gl_WorkGroupID.x", "SR_CTAID.Y": "gl_WorkGroupID.y", "SR_CTAID.Z": "gl_WorkGroupID.z",
-        "SR_LANEID": "gl_SubgroupInvocationID", "SR_LTMASK": "gl_SubgroupLtMask.x", "SR_LEMASK": "gl_SubgroupLeMask.x",
-        "SR_GTMASK": "gl_SubgroupGtMask.x", "SR_GEMASK": "gl_SubgroupGeMask.x", "SR_EQMASK": "gl_SubgroupEqMask.x",
+        "SR_LANEID": "(gl_SubgroupInvocationID & 31u)",
+        "SR_LTMASK": "gl_SubgroupLtMask[gl_SubgroupInvocationID >> 5u]",
+        "SR_LEMASK": "gl_SubgroupLeMask[gl_SubgroupInvocationID >> 5u]",
+        "SR_GTMASK": "gl_SubgroupGtMask[gl_SubgroupInvocationID >> 5u]",
+        "SR_GEMASK": "gl_SubgroupGeMask[gl_SubgroupInvocationID >> 5u]",
+        "SR_EQMASK": "gl_SubgroupEqMask[gl_SubgroupInvocationID >> 5u]",
         "SRZ": "0u", "SR255": "0u",
     }  # fmt: skip
 
@@ -117,7 +133,7 @@ class ThreadOps:
 
     def match(self, i: Insn) -> str:
         """MATCH.ANY: the mask of the active lanes whose Ra equals this lane's; MATCH.ALL: the active mask and Pu set
-        when every active lane holds the same Ra, else 0 and Pu clear. Subgroups of 32, as the other warp ops."""
+        when every active lane in the logical 32-lane warp holds the same Ra, else 0 and Pu clear."""
         if i.sym("sz") not in ("U32", "U64"):
             raise Unsupported(f"MATCH.{i.sym('sz')}")
         self.uses_subgroup = True
@@ -125,14 +141,16 @@ class ThreadOps:
         if i.sym("sz") == "U64":
             a = f"uvec2({a}, {self.src_u_hi(i, 'a')})"
         if i.sym("op") == "ALL":
-            out = [f"bool meq = subgroupAllEqual({a}); uint mm = meq ? subgroupBallot(true).x : 0u;"]
+            out = [f"{'uvec2' if 'uvec2' in a else 'uint'} mv = {a}; uint wmask = warp_ballot(true);",
+                   "bool meq = warp_all(mv == warp_shuffle(mv, uint(findLSB(wmask))));",
+                   "uint mm = meq ? wmask : 0u;"]
             if i.v("Pu", PT) != PT:
                 out.append(f"p{i.v('Pu')} = meq;")
         else:
             out = [
                 f"{'uvec2' if 'uvec2' in a else 'uint'} mv = {a}; uint mm = 0u;",
-                "for (uint k = 0u; k < 32u; k++) if (subgroupShuffle(mv, k) == mv) mm |= 1u << k;",
-                "mm &= subgroupBallot(true).x;",
+                "for (uint k = 0u; k < 32u; k++) if (warp_shuffle(mv, k) == mv) mm |= 1u << k;",
+                "mm &= warp_ballot(true);",
             ]
         if n != RZ:
             self.regs.add(n)
@@ -148,7 +166,7 @@ class ThreadOps:
         eq_p, all_p = p, f"({p}) || exited" if self.zombie else p
         if self.zombie:
             p = f"({p}) && !exited"
-        v = {"ALL": f"subgroupAll({all_p})", "ANY": f"subgroupAny({p})", "EQ": f"subgroupAllEqual({eq_p})"}.get(
+        v = {"ALL": f"warp_all({all_p})", "ANY": f"warp_any({p})", "EQ": f"warp_equal({eq_p})"}.get(
             i.sym("voteop")
         )
         if v is None:
@@ -158,7 +176,7 @@ class ThreadOps:
         d = i.v(f"{u}Rd")
         if d != (URZ if u else RZ):
             (self.uregs if u else self.regs).add(d)
-            out.append(f"{'ur' if u else 'r'}{d} = subgroupBallot({p}).x;")
+            out.append(f"{'ur' if u else 'r'}{d} = warp_ballot({p});")
         pu = i.v(f"{u}Pu")
         if pu != PT:
             out.append(f"{'up' if u else 'p'}{pu} = {v};")

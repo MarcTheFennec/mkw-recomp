@@ -181,7 +181,8 @@ def windows_crt(crt: Path) -> None:
     84 s on our 6-thread PC). They depend only on the target and zig's version: the Linux zig of the same release builds
     them."""
     host = DL / "zig-host"
-    archive = fetch(*PINS["linux"]["zig"])
+    # built on Windows itself (build.py HOST_WINDOWS): the Windows zig of the same release builds the same C runtime
+    archive = fetch(*PINS["windows" if os.name == "nt" else "linux"]["zig"])
     stamp = host / ".from"
     # unpacked once per zig version: a fresh unpack's file times make zig's cache build everything again (41 s)
     if not stamp.exists() or stamp.read_text() != archive.name:
@@ -196,7 +197,7 @@ def windows_crt(crt: Path) -> None:
         # runtime was 2 of the Windows job's 4 minutes on a fresh runner, seconds when the cache has it
         env = {**os.environ, "ZIG_GLOBAL_CACHE_DIR": str(DL / "zig-crt-cache"), "ZIG_LIB_DIR": str(host / "lib"),
                "ZIG_VERBOSE_LINK": "1"}  # fmt: skip
-        r = subprocess.run([str(host / "zig"), "cc", "-target", "x86_64-windows-gnu", "-shared", "-o",
+        r = subprocess.run([str(host / ("zig.exe" if os.name == "nt" else "zig")), "cc", "-target", "x86_64-windows-gnu", "-shared", "-o",
                             str(t / "probe.dll"), str(t / "probe.c")],
                            env=env, capture_output=True, text=True, check=True)  # fmt: skip
         (line,) = [ln.split() for ln in (r.stdout + r.stderr).splitlines() if ln.startswith("lld-link ")]

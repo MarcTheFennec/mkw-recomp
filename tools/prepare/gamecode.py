@@ -21,6 +21,16 @@ from machine import Failed, crt_link, emit, package_dir
 LINK_TIMEOUT = 30 * 60  # far past a slow link: only a hung linker (issue #2: "stuck" after the last object)
 
 
+class DamagedSource(Failed):
+    """A generated C file with NUL bytes in it (#434: `uint6<NUL>_t` in main_0203.c, on Windows): the write that made it
+    did not reach the disk whole (a crash or power cut after the size grew). Generate's key still matches, so every retry
+    reused it and failed the same; prepare.py regenerates once on this."""
+
+
+def damaged(src: Path) -> bool:
+    return b"\0" in src.read_bytes()
+
+
 def write_link_response(rsp: Path, objects: list[Path], windows_quoting: bool) -> None:
     """Objects passed to the linker without the process command line's length limit."""
     # as_posix converts native Windows separators only: a backslash in a POSIX folder name is a literal character.
@@ -57,27 +67,27 @@ def compile_game(game: Path, exefs: Path, work: Path, cc: list[str], target: str
     # every folder with a runtime header the package carries (runtime/cpu, runtime/core/boot for gamelib.h), as build.py
     # does: a fixed list missed gamelib.h when it moved to core/boot (issue #1, v0.1.1)
     inc = [f"-I{d}" for d in sorted({p.parent for p in (ROOT / "runtime").rglob("*.h")})] + [f"-I{gen}"]
-    jobs_c = [(src, obj / f"{src.parent.name}_{src.stem}.o", [*flags, f"-I{ROOT / 'runtime/cpu'}"]) for src in srcs]
+    cpu = ROOT / "runtime/cpu"
+    jobs_c = [(src, obj / f"{src.parent.name}_{src.stem}.o", [*flags, f"-I{cpu}"]) for src in srcs]
     jobs_c.append((obj / "modules.c", obj / "modules.o", [*flags, gid, *inc]))
     jobs_c.sort(key=lambda j: -j[0].stat().st_size)  # the largest first: no 10 MB main_table.c alone at the end
     total, done = len(jobs_c) + 1, 0  # the link is the last unit: a progress bar full before it hid it (issue #2)
     extra = [str(package_dir(game) / "lib/libmkw.dll.a")] if windows else ["-Wl,-z,noexecstack"]
-    base = common_key(cc, gen)
+    # The chunks see runtime/cpu and only the generated headers they name: a new patch set changes the generated
+    # patches.h, which no chunk includes, and recompiled all 359 of them (PR 450 on 16/11/2026, 9 min on the 6-thread
+    # Windows PC). modules.c sees every folder and keeps the whole list.
+    base_all = common_key(cc, sorted((ROOT / "runtime").rglob("*.h")) + sorted(gen.rglob("*.h")))
+    base_cpu = common_key(cc, sorted(cpu.rglob("*.h")))
+    gen_headers = sorted(gen.rglob("*.h"))
 
     def one(job: tuple[Path, Path, list[str]]) -> str:
         src, out, f = job
-        key = object_key(base, src, f, gen)
+        key = object_key(base_all if src.parent == obj else chunk_base(cc, base_cpu, gen_headers, src), src, f, gen)
         stamp = out.with_suffix(".key")
         if out.is_file() and stamp.is_file() and stamp.read_text() == key:
             return ""
         stamp.unlink(missing_ok=True)
-        r = subprocess.run(
-            [*cc, "-std=gnu11", *f, "-c", str(src), "-o", str(out)], capture_output=True, text=True, check=False
-        )
-        if r.returncode:
-            return f"{src.name}: {r.stderr.strip()[-300:]}"
-        stamp.write_text(key)
-        return ""
+        return compile_one(cc, f, src, out, stamp, key)
 
     lib = game / ("mkwgame.dll" if windows else "mkwgame.so")
     part = lib.with_name(lib.name + ".part")
@@ -112,11 +122,34 @@ def compile_game(game: Path, exefs: Path, work: Path, cc: list[str], target: str
     (game / "mkwgame.id").write_text(build.game_id())  # runtime/core/boot/gamelib.c rt_game_present
 
 
-def common_key(cc: list[str], gen: Path) -> str:
-    """What every object depends on besides its own C and flags: the compiler and every header it can include (the
-    runtime's and the generated ones)."""
-    h = hashlib.sha256(subprocess.run([*cc, "--version"], capture_output=True, text=True, check=False).stdout.encode())
-    for p in sorted((ROOT / "runtime").rglob("*.h")) + sorted(gen.glob("*.h")):
+def compile_one(cc: list[str], flags: list[str], src: Path, out: Path, stamp: Path, key: str) -> str:
+    """One object: "" when built, else the error for the player; a damaged source raises DamagedSource instead."""
+    r = subprocess.run([*cc, "-std=gnu11", *flags, "-c", str(src), "-o", str(out)], capture_output=True, text=True,
+                       check=False)  # fmt: skip
+    if r.returncode:
+        if damaged(src):
+            raise DamagedSource(f"compiling the game code failed: {src.name} has NUL bytes (a damaged write)")
+        return f"{src.name}: {r.stderr.strip()[-300:]}"
+    stamp.write_text(key)
+    return ""
+
+
+def chunk_base(cc: list[str], base_cpu: str, gen_headers: list[Path], src: Path) -> str:
+    """A chunk's common key: runtime/cpu's headers, plus the generated ones its C names."""
+    text = src.read_bytes()
+    named = [p for p in gen_headers if f'#include "{p.name}"'.encode() in text]
+    return common_key(cc, named, base_cpu) if named else base_cpu
+
+
+def common_key(cc: list[str], headers: list[Path], base: str = "") -> str:
+    """What an object depends on besides its own C and flags: the compiler (or `base`, a key that already holds it)
+    and every header it can include."""
+    h = hashlib.sha256(
+        base.encode()
+        if base
+        else subprocess.run([*cc, "--version"], capture_output=True, text=True, check=False).stdout.encode()
+    )
+    for p in headers:
         h.update(p.relative_to(p.parents[1]).as_posix().encode() + p.read_bytes())
     return h.hexdigest()
 
@@ -146,4 +179,3 @@ def probe_link(cc: list[str], obj: Path, windows: bool) -> None:
 def tail_of(out: str | bytes | None) -> str:
     text = out.decode(errors="replace") if isinstance(out, bytes) else out or ""
     return text.strip()[-300:] or "no output"
-

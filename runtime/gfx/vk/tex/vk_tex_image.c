@@ -14,6 +14,7 @@
 #include "vk.h"
 #include "vk_defaults.h"
 #include "vk_exec.h"
+#include "vk_tex_gfx9.h"
 #include "vk_tex_internal.h"
 #include "platform/platform.h"
 
@@ -61,6 +62,18 @@ static int format_compressed(VkFormat f) {   // vkCmdClearColorImage takes no bl
 static int bind_pool_memory(VkCtx *c, Tex *e, VkImage img) {
     VkMemoryRequirements req;
     vkGetImageMemoryRequirements(c->device, img, &req);
+    // A Vulkan image larger than its NVN storage overwrites the pool memory after it. AMD lays out a 676x676 D32S8 in
+    // 0x2e0170 bytes for NVN's 0x204000, and the minimap's depth wrote into its colour target at +0x204200 (#365,
+    // diagnosed by elenotrindade). A depth or stencil image is not read through other formats in that memory, so it
+    // gets its own; a colour one stays bound, as the game may alias it. MKW_POOL_SPILL=1 binds them all as before.
+    static int spill_env = -1;
+    if (spill_env < 0) spill_env = cfg_get("MKW_POOL_SPILL") && atoi(cfg_get("MKW_POOL_SPILL"));
+    if ((e->f.depth || e->f.stencil) && req.size > e->t.L.size && !spill_env) {
+        rt_log("vk_tex: depth %#llx %ux%u fmt %#x takes %#llx bytes for NVN's %#llx: own memory (MKW_POOL_SPILL)",
+               (unsigned long long)e->pub.addr, e->key.d.width, e->key.d.height, e->key.d.format,
+               (unsigned long long)req.size, (unsigned long long)e->t.L.size);
+        return 0;
+    }
     VkMemSpan sp;
     if (!vk_mem_resolve(e->pub.addr, req.size, &sp) || !sp.alloc || sp.alloc_offset % req.alignment) return 0;
     VmaAllocationInfo info;
@@ -167,43 +180,61 @@ VkFormat vk_texture_view_format(const VkTexImage *img, VkFormat want) {
     return img->format;
 }
 
-static int block_views_ok(const VkImageCreateInfo *ci) {
-    VkPhysicalDeviceImageFormatInfo2 fi = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2,
-                                           .format = ci->format, .type = ci->imageType, .tiling = ci->tiling,
-                                           .usage = ci->usage, .flags = ci->flags};
-    VkImageFormatProperties2 p = {.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2};
-    if (vkGetPhysicalDeviceImageFormatProperties2(vk_ctx()->phys, &fi, &p) != VK_SUCCESS) return 0;
-    const VkImageFormatProperties *q = &p.imageFormatProperties;
-    return ci->extent.width <= q->maxExtent.width && ci->extent.height <= q->maxExtent.height &&
-           ci->extent.depth <= q->maxExtent.depth && ci->mipLevels <= q->maxMipLevels &&
-           ci->arrayLayers <= q->maxArrayLayers;
-}
-
-// Whether the driver takes an image of this format, type, usage, flags and view format list, whatever its size: the
-// usages each format allows one by one can still be refused together (#174: R8G8_UNORM with STORAGE and its sRGB twin,
-// which has no storage, in the list, on Intel's ANV: VK_ERROR_FORMAT_NOT_SUPPORTED and the image made anyway).
-// Answers kept (64), so the replay thread asks the driver once per kind of image.
+// Whether the driver takes an image of this format, type, usage, flags and view format list, and the limits its shape
+// must fit: the usages each format allows one by one can still be refused together (#174: R8G8_UNORM with STORAGE and
+// its sRGB twin, which has no storage, in the list, on Intel's ANV: VK_ERROR_FORMAT_NOT_SUPPORTED and the image made
+// anyway), and past the query's maxExtent / maxMipLevels / maxArrayLayers / sampleCounts vkCreateImage fails — with
+// the optional usages the image carries, so they are dropped below before it can (VK_IMAGE_USAGE_STORAGE_BIT on a
+// format that allows it, the feedback loop).
+// Asked once per kind of image, 64 kinds kept: the answer's limits belong to the query's inputs (format, type, tiling,
+// usage, flags, whether a view format list rides in pNext — its formats follow the image's own), never to a shape, so
+// every shape is compared against the same entry instead of asking again for each new extent, mip count or layer count
+// the game's textures have (a 3D texture 256x256x256 does not send the next 32x32x8 back to the driver).
 static int usage_ok(const VkImageCreateInfo *ci) {
-    static struct { VkFormat f; VkImageType t; VkImageUsageFlags u; VkImageCreateFlags fl; int list, ok; } seen[64];
+    struct limits {
+        VkFormat f;                   // the query's inputs
+        VkImageType t;
+        VkImageTiling til;
+        VkImageUsageFlags u;
+        VkImageCreateFlags fl;
+        int list;                     // a VkImageFormatListCreateInfo in pNext
+        int ok;                       // VkResult == VK_SUCCESS
+        VkExtent3D max_extent;        // what a shape must fit when ok
+        uint32_t max_mips, max_layers;
+        VkSampleCountFlags samples;
+    };
+    static struct limits seen[64];
     static int nseen;
     static PlatMutex lk = PLAT_MUTEX_INIT;
-    int ok = -1;
+    struct limits got = {0};
+    int found = 0;
     plat_mutex_lock(&lk);
-    for (int i = 0; i < nseen && ok < 0; i++)
-        if (seen[i].f == ci->format && seen[i].t == ci->imageType && seen[i].u == ci->usage && seen[i].fl == ci->flags &&
-            seen[i].list == (ci->pNext != NULL))
-            ok = seen[i].ok;
+    for (int i = 0; i < nseen && !found; i++)
+        if (seen[i].f == ci->format && seen[i].t == ci->imageType && seen[i].til == ci->tiling &&
+            seen[i].u == ci->usage && seen[i].fl == ci->flags && seen[i].list == (ci->pNext != NULL))
+            got = seen[i], found = 1;
     plat_mutex_unlock(&lk);
-    if (ok >= 0) return ok;
-    VkPhysicalDeviceImageFormatInfo2 fi = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2,
-                                           .pNext = ci->pNext, .format = ci->format, .type = ci->imageType,
-                                           .tiling = ci->tiling, .usage = ci->usage, .flags = ci->flags};
-    VkImageFormatProperties2 p = {.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2};
-    ok = vkGetPhysicalDeviceImageFormatProperties2(vk_ctx()->phys, &fi, &p) == VK_SUCCESS;
-    plat_mutex_lock(&lk);
-    if (nseen < 64) seen[nseen++] = (typeof(seen[0])){ci->format, ci->imageType, ci->usage, ci->flags, ci->pNext != NULL, ok};
-    plat_mutex_unlock(&lk);
-    return ok;
+    if (!found) {
+        VkPhysicalDeviceImageFormatInfo2 fi = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2,
+                                               .pNext = ci->pNext, .format = ci->format, .type = ci->imageType,
+                                               .tiling = ci->tiling, .usage = ci->usage, .flags = ci->flags};
+        VkImageFormatProperties2 p = {.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2};
+        got = (struct limits){.f = ci->format, .t = ci->imageType, .til = ci->tiling, .u = ci->usage,
+                              .fl = ci->flags, .list = ci->pNext != NULL};
+        got.ok = vkGetPhysicalDeviceImageFormatProperties2(vk_ctx()->phys, &fi, &p) == VK_SUCCESS;
+        if (got.ok) {
+            const VkImageFormatProperties *q = &p.imageFormatProperties;
+            got.max_extent = q->maxExtent, got.max_mips = q->maxMipLevels, got.max_layers = q->maxArrayLayers;
+            got.samples = q->sampleCounts;
+        }
+        plat_mutex_lock(&lk);
+        if (nseen < 64) seen[nseen++] = got;
+        plat_mutex_unlock(&lk);
+    }
+    return got.ok && ci->extent.width <= got.max_extent.width && ci->extent.height <= got.max_extent.height &&
+           ci->extent.depth <= got.max_extent.depth && ci->mipLevels <= got.max_mips &&
+           ci->arrayLayers <= got.max_layers &&
+           ((VkSampleCountFlags)ci->samples & got.samples) == (VkSampleCountFlags)ci->samples;
 }
 
 // UNDEFINED -> GENERAL; new depth / stencil images start cleared (LAS textures.c: the game copies depth
@@ -218,7 +249,26 @@ void init_image(Tex *e, VkCommandBuffer cb) {
     VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &ib};
     vkCmdPipelineBarrier2(cb, &di);
     if (e->sparse) {
-        // Tiles get zeroed memory when they are bound; a clear would erase physical pages other images share.
+        // Mapped tiles get zeroed memory separately and may alias another image. Only the private small mips are ours
+        // to initialize here: VMA can reuse memory holding another texture's data, even before this image was written.
+        if (e->sparse_tail.zero_bytes) {
+            VkBuffer zeros;
+            void *map = vk_staging(e->sparse_tail.zero_bytes, &zeros, NULL);
+            memset(map, 0, (size_t)e->sparse_tail.zero_bytes);
+            uint32_t n = (e->pub.levels - e->sparse_tail.first) * e->pub.layers;
+            VkBufferImageCopy *regions = calloc(n, sizeof *regions);
+            if (!regions) rt_fatal("vk: out of memory for sparse tail initialization");
+            uint32_t k = 0;
+            for (uint32_t l = e->sparse_tail.first; l < e->pub.levels; l++) {
+                uint32_t w = e->pub.width >> l, h = e->pub.height >> l;
+                for (uint32_t layer = 0; layer < e->pub.layers; layer++)
+                    regions[k++] = (VkBufferImageCopy){.imageSubresource = {e->sparse_tail.aspect, l, layer, 1},
+                                                      .imageExtent = {w ? w : 1, h ? h : 1, 1}};
+            }
+            vkCmdCopyBufferToImage(cb, zeros, e->pub.image, VK_IMAGE_LAYOUT_GENERAL, n, regions);
+            barrier(cb, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, ALL_RW);
+            free(regions);
+        }
     } else if (e->f.depth || e->f.stencil) {
         VkClearDepthStencilValue zero = {0.0f, 0};
         VkImageSubresourceRange rg = {e->pub.aspect, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
@@ -298,6 +348,7 @@ static int astc_alpha_one(const uint8_t *p, uint64_t size, int bw, int bh) {
 #define TEX_POOL_BLOCK (256ull << 20)
 static VmaPool tex_pool;              // set once its blocks exist (tex_pool_main)
 static uint32_t tex_pool_type;
+static PlatThread *tex_pool_thread;
 
 static void tex_pool_main(void *arg) {
     int blocks = (int)(intptr_t)arg;
@@ -336,7 +387,19 @@ void vk_tex_pool_start(void) {
                          : (int)vk_default_tex_pool_blocks(
                                c->props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, vram >> 20);
     if (blocks <= 0) return;
-    if (!plat_thread_spawn(tex_pool_main, (void *)(intptr_t)blocks, "vk tex pool", 0)) rt_log("vk: texture pool: no thread");
+    tex_pool_thread = plat_thread_new(tex_pool_main, (void *)(intptr_t)blocks, "vk tex pool");
+    if (!tex_pool_thread) rt_log("vk: texture pool: no thread");
+}
+
+// All images are gone and the device is idle. A pool must be destroyed before VMA's allocator; its creator may
+// still be allocating the minimum blocks when a short probe shuts down, so join it before taking the pool away.
+void vk_tex_pool_stop(void) {
+    if (tex_pool_thread) {
+        plat_thread_join(tex_pool_thread);
+        tex_pool_thread = NULL;
+    }
+    VmaPool pool = __atomic_exchange_n(&tex_pool, NULL, __ATOMIC_ACQ_REL);
+    if (pool) vmaDestroyPool(vk_ctx()->vma, pool);
 }
 
 VkResult vma_image(VkCtx *c, const VkImageCreateInfo *ci, const VmaAllocationCreateInfo *ai, VkImage *img,
@@ -362,6 +425,15 @@ static VkDeviceSize image_bytes(VkCtx *c, const VkImageCreateInfo *ci) {
     vkGetImageMemoryRequirements(c->device, probe, &mr);
     vkDestroyImage(c->device, probe, NULL);
     return mr.size;
+}
+
+// RADV's GFX9 addrlib (Vega/Renoir and the rest of the pre-RDNA chips) raises SIGTRAP inside vkCreateImage when this
+// image carries COLOR_ATTACHMENT: the decision, free of Vulkan, is vk_tex_gfx9.c's.
+static int gfx9_no_block_ca(const VkImageCreateInfo *bc, uint32_t bw, uint32_t bh) {
+    VkCtx *c = vk_ctx();
+    return vk_tex_gfx9_skip_block_ca(vk_caps.driver_id == VK_DRIVER_ID_MESA_RADV, c->props.vendorID,
+                                     c->props.limits.maxImageDimension3D, bc->imageType == VK_IMAGE_TYPE_3D,
+                                     bc->mipLevels, bc->extent.depth, bc->extent.width, bc->extent.height, bw, bh);
 }
 
 Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
@@ -447,7 +519,11 @@ Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
     if (!ds && (ff & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) && samples == 1)
         usage |= VK_IMAGE_USAGE_STORAGE_BIT;
     VkImageCreateFlags flags = ds ? 0 : VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;   // format-reinterpreting views
-    if (type == VK_IMAGE_TYPE_2D && layers >= 6 && w == h && samples == 1) flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    // Array shape alone does not imply cube views. RX 570 samples non-base mips incorrectly when ordinary BC arrays
+    // carry this flag too (transfer readbacks still match); only the NVN cube targets need it.
+    if ((d->target == NVN_TEXTURE_TARGET_CUBEMAP || d->target == NVN_TEXTURE_TARGET_CUBEMAP_ARRAY) &&
+        type == VK_IMAGE_TYPE_2D && layers >= 6 && w == h && samples == 1)
+        flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
     // NVN renders into a 3D texture slice by slice (a view's min layer is the depth plane, nvn_mtl.m), e.g. the
     // grading LUT of the menu background blur. Vulkan needs a 2D view of the slice for that.
     if (type == VK_IMAGE_TYPE_3D && (usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)) flags |= VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;
@@ -455,16 +531,22 @@ Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
                             .extent = {w, h, depth}, .mipLevels = levels, .arrayLayers = layers,
                             .samples = (VkSampleCountFlagBits)samples, .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = usage,
                             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
-    int bw, bh, block_views = 0;
+    int bw, bh, block_views = 0, block_ca_skipped = 0;
     // Not for a sparse texture of a virtual pool (vk_sparse.c): RADV has no sparse blocks for a BC image with
     // COLOR_ATTACHMENT usage (run-sp2: BC6H), and the game fills those with copies.
     int sparse_cand = (d->flags & NVN_TEXTURE_FLAGS_SPARSE) && nvn_gpu_only(k->addr);
     if (!ds && samples == 1 && f.vk == f.ideal && !sparse_cand && nvn_fmt_bpb(d->format, &bw, &bh) && bw == 4 && bh == 4) {
-        VkImageCreateInfo bc = ci;   // BC formats: renderable through views of their blocks (block_views_ok)
+        VkImageCreateInfo bc = ci;   // BC formats: renderable through views of their blocks (usage_ok)
         bc.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         bc.flags |= VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
         if (type == VK_IMAGE_TYPE_3D) bc.flags |= VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;
-        if (block_views_ok(&bc)) ci = bc, usage = bc.usage, flags = bc.flags, block_views = 1;
+        if (gfx9_no_block_ca(&bc, (uint32_t)bw, (uint32_t)bh)) {   // the shape addrlib SIGTRAPs on (vk_tex_gfx9.c)
+            static volatile int32_t n_gfx9;
+            log_limited(&n_gfx9, "texture %#x: 3D %ux%ux%u levels %u made without block-view COLOR_ATTACHMENT (RADV "
+                                 "GFX9 addrlib); a draw into it is left out and logged (vk_exec_rt.c)",
+                        d->format, w, h, depth, levels);
+            block_ca_skipped = 1;
+        } else if (usage_ok(&bc)) ci = bc, usage = bc.usage, flags = bc.flags, block_views = 1;
     }
     // Feedback loops (vk.h VkCtx.feedback): every attachable image may be sampled by a draw of a pass that renders it,
     // so it gets the usage now; adding it when a loop shows up would mean recreating the image (that lost the
@@ -514,7 +596,7 @@ Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
     e->f = f;
     e->pub.addr = k->addr;
     VkImage img = VK_NULL_HANDLE;
-    if (vk_sparse_create(&ci, d, k->addr, L.size, &img)) e->sparse = 1;
+    if (vk_sparse_create(&ci, d, k->addr, L.size, &img, &e->sparse_tail)) e->sparse = 1;
     else if (nvn_gpu_only(k->addr)) {   // storage in a physical or virtual pool: alias the pool memory (section 3.2)
         if (vkCreateImage(c->device, &ci, NULL, &img) == VK_SUCCESS && !bind_pool_memory(c, e, img)) {
             vkDestroyImage(c->device, img, NULL);
@@ -596,7 +678,7 @@ Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
         p->swz[3] = NVN_TEXTURE_SWIZZLE_A;
     p->mirrored = (uint8_t)tex_mirrored(t);
     p->bound = e->bound_to != NULL;
-    p->block_views = (uint8_t)block_views;
+    p->block_views = (uint8_t)block_views, p->block_ca_skipped = (uint8_t)block_ca_skipped;
     p->listed = (uint8_t)list, p->twin = listed[1];
     p->fb_usage = (uint8_t)fb_usage;
 

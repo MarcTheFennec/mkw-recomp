@@ -1,4 +1,4 @@
-<!-- translated from README.md c175259cbc98 -->
+<!-- translated from README.md dae9dd5efeb2 -->
 
 <p align="center"><img src="../logo.svg" width="128" alt="mkw-recomp logo"></p>
 
@@ -85,10 +85,10 @@ El trabajo pendiente principal, por orden; los detalles están en [docs/roadmap.
 
 ## Rendimiento
 
-Los tiempos por fotograma medidos, cada uno con su fecha, están en [docs/performance.md](../../docs/performance.md). Para
+Los tiempos por fotograma medidos, cada uno con la versión que probó, están en [docs/performance.md](../../docs/performance.md). Para
 añadir tu máquina, abre un
 [informe de rendimiento](https://github.com/adriadam10/mkw-recomp/issues/new?template=performance.yml): entra en la
-tabla con la fecha del informe. Los tiempos son los fotogramas del propio juego: la generación de fotogramas muestra
+tabla con la versión que indica. Los tiempos son los fotogramas del propio juego: la generación de fotogramas muestra
 más fotogramas pero no los acorta. 16,7 ms son 60 fps; con Fotogramas por segundo en Automático (lo de la consola)
 baja a 30 fps cuando 60 no se alcanzan, y un fotograma de más de 33,3 ms hace que la carrera vaya más lenta que el
 tiempo real.

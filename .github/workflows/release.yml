@@ -29,10 +29,10 @@ jobs:
     steps:
       - name: Tools
         run: pacman -Syu --noconfirm --needed git ccache clang lld llvm ninja make cmake pkgconf expat binutils uv python
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: ccache in the checkout, kept between runs (build.py compiles through it when installed)
         run: echo "CCACHE_DIR=$PWD/.ccache" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: .ccache
           key: ccache-${{ github.job }}-${{ github.sha }}
@@ -44,7 +44,7 @@ jobs:
           mkdir -p scratchpad/vma
           curl -sSfL -o scratchpad/vma/vk_mem_alloc.h "$VMA_URL"
           echo "$VMA_SHA256  scratchpad/vma/vk_mem_alloc.h" | sha256sum -c -
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: build/sysroot
           key: sysroot-${{ hashFiles('tools/build/sysroot.py') }}
@@ -56,7 +56,7 @@ jobs:
         run: uv run tools/build/dist.py --target linux
       - name: AppImage
         run: uv run tools/build/release.py --target linux --version "${GITHUB_REF_NAME#v}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux
           path: build/release/*.AppImage
@@ -68,10 +68,10 @@ jobs:
     steps:
       - name: Tools
         run: pacman -Syu --noconfirm --needed git ccache clang lld llvm ninja make cmake pkgconf expat binutils uv python
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: ccache in the checkout, kept between runs (build.py compiles through it when installed)
         run: echo "CCACHE_DIR=$PWD/.ccache" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: .ccache
           key: ccache-${{ github.job }}-${{ github.sha }}
@@ -83,7 +83,7 @@ jobs:
           mkdir -p scratchpad/vma
           curl -sSfL -o scratchpad/vma/vk_mem_alloc.h "$VMA_URL"
           echo "$VMA_SHA256  scratchpad/vma/vk_mem_alloc.h" | sha256sum -c -
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: build/sysroot-aarch64
           key: sysroot-aarch64-${{ hashFiles('tools/build/sysroot.py') }}
@@ -95,7 +95,7 @@ jobs:
         run: uv run tools/build/dist.py --target linux-aarch64
       - name: AppImage
         run: uv run tools/build/release.py --target linux-aarch64 --version "${GITHUB_REF_NAME#v}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-aarch64
           path: build/release/*.AppImage
@@ -107,21 +107,21 @@ jobs:
     steps:
       - name: Tools
         run: pacman -Syu --noconfirm --needed git ccache ninja cmake binutils uv python
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: ccache in the checkout, kept between runs (build.py compiles through it when installed)
         run: echo "CCACHE_DIR=$PWD/.ccache" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: .ccache
           key: ccache-${{ github.job }}-${{ github.sha }}
           restore-keys: ccache-${{ github.job }}-
       - name: Git trusts the checkout (build.py's version comes from git describe)
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: build/win
           key: windeps-${{ hashFiles('tools/build/windeps.py') }}
-      - uses: actions/cache@v4   # the setup's downloads (checked by sha256) and zig's build of the Windows C runtime
+      - uses: actions/cache@v6   # the setup's downloads (checked by sha256) and zig's build of the Windows C runtime
         with:
           path: build/dist/dl
           key: dist-dl-windows-${{ hashFiles('tools/build/dist.py') }}
@@ -133,7 +133,7 @@ jobs:
         run: uv run tools/build/dist.py --target windows
       - name: Zip
         run: uv run tools/build/release.py --target windows --version "${GITHUB_REF_NAME#v}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: build/release/*.zip
@@ -146,11 +146,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Notes (docs/release-template.md with the version's section of CHANGELOG.md)
         run: uv run tools/build/notes.py --version "${GITHUB_REF_NAME#v}" --out notes.md
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           path: release
           merge-multiple: true

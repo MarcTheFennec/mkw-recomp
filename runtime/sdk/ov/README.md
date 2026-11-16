@@ -5,7 +5,7 @@ Replacements of `nn::*` functions by name: system, input, audio, video, graphics
 | File | What it is |
 |---|---|
 | `ov_system.c` | Accounts, applets, time, system fonts, etc. |
-| `ov_input.c`, `ov_media.c`, `ov_gfx.c`, `ov_zstd.c` | Input, Opus, the SDK's graphics (`nv::InitializeGraphics(0, 0)` is valid on Switch 2; `nv::InitCheck`), native zstd |
+| `ov_input.c`, `ov_media.c`, `ov_gfx.c`, `ov_zstd.c` | Input, Opus, the SDK's graphics (`nv::InitializeGraphics(0, 0)` is valid on Switch 2; `nv::InitCheck`), native zstd (its outputs go to `core/hacks/classic.c`, which patches the cups' archive) |
 | `ov_codec.c` | MKW's video: the `nn::codec` video API (VP9 with libvpx, decoded in `Submit`) and the `nn::syncpt` events as the game's `SystemEvent` |
 | `ov.h` | Header shared by the replacements and their test (`ov_probe.c`) |
 | `ov_touch.c` | MKW's own: touch screen off (optional), reads without touches |

@@ -224,16 +224,23 @@ uint64_t chunk_len(const PoolRec *r, uint32_t i) {
     return r->size - lo < ch ? r->size - lo : ch;
 }
 
-int64_t phys_backed_n, phys_backed_bytes, phys_failed_n;   // phys_lock
+int64_t phys_backed_n, phys_backed_bytes, phys_failed_n, phys_host_n;   // phys_lock
 
 // Serializes chunk allocation: made outside pool_lock (the zero fill records an upload) and published under it.
 PlatMutex phys_lock = PLAT_MUTEX_INIT;
 
-static int alloc_chunk(VkCtx *c, uint64_t size, PhysChunk *out) {
+// 1: backed; 0: failed (logged); -1: out of device memory with quiet set, nothing logged (phys_back relieves and retries).
+// anywhere: device-local preferred, else any type the buffer and images allow (system memory over PCIe).
+static int alloc_chunk(VkCtx *c, uint64_t size, PhysChunk *out, int quiet, int anywhere) {
     VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = size, .usage = pool_usage(c),
                              .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
     VkResult res = vkCreateBuffer(c->device, &bi, NULL, &out->buf);
-    if (res != VK_SUCCESS) { rt_log("vk: physical pool: vkCreateBuffer failed (%d)", (int)res); return 0; }
+    if (res != VK_SUCCESS) {
+        *out = (PhysChunk){0};
+        if (quiet && res == VK_ERROR_OUT_OF_DEVICE_MEMORY) return -1;
+        rt_log("vk: physical pool: vkCreateBuffer failed (%d)", (int)res);
+        return 0;
+    }
     VkMemoryRequirements rb;
     vkGetBufferMemoryRequirements(c->device, out->buf, &rb);
     VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
@@ -251,20 +258,19 @@ static int alloc_chunk(VkCtx *c, uint64_t size, PhysChunk *out) {
     VkMemoryRequirements req = {.size = (rb.size + align - 1) & ~(align - 1), .alignment = align, .memoryTypeBits = bits};
     // Chunks share VMA blocks; a pool taken whole (MKW_PHYS_CHUNK=0) gets memory of its own as before.
     VmaAllocationCreateInfo aci = {.flags = size > (64ull << 20) ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0,
-                                   .requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT};
+                                   .requiredFlags = anywhere ? 0 : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                   .preferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT};
     res = vmaAllocateMemory(c->vma, &req, &aci, &out->alloc, NULL);
-    // Out of memory: released and idle textures go first, as for a texture or a staging buffer (vk_texture_trim).
-    // Steam Deck, 13/11/2026 (1 GB UMA carve-out, low preset, time trial): released render targets held 2 601 MiB
-    // when 13 chunks failed in a row, and each failed chunk leaves its pages unmapped until a later request.
-    for (int round = 0; res == VK_ERROR_OUT_OF_DEVICE_MEMORY && round < 4 &&
-                        vk_texture_trim(size * 2 + (8ull << 20)); round++) {
-        vk_mem_collect();
-        res = vmaAllocateMemory(c->vma, &req, &aci, &out->alloc, NULL);
-    }
     if (res != VK_SUCCESS ||
         (res = vmaBindBufferMemory(c->vma, out->alloc, out->buf)) != VK_SUCCESS) {
-        rt_log("vk: physical pool chunk of %#llx bytes: device-local allocation failed (%d)", (unsigned long long)size,
-               (int)res);
+        if (quiet && res == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+            if (out->alloc) vmaFreeMemory(c->vma, out->alloc);
+            vkDestroyBuffer(c->device, out->buf, NULL);
+            *out = (PhysChunk){0};
+            return -1;
+        }
+        rt_log("vk: physical pool chunk of %#llx bytes: %s allocation failed (%d)", (unsigned long long)size,
+               anywhere ? "any memory" : "device-local", (int)res);
         if (out->alloc) vmaFreeMemory(c->vma, out->alloc);
         vkDestroyBuffer(c->device, out->buf, NULL);
         *out = (PhysChunk){0};
@@ -287,11 +293,35 @@ static int alloc_chunk(VkCtx *c, uint64_t size, PhysChunk *out) {
 // virtual pages over it resolve as unmapped, and a later request tries again.
 void phys_back(PoolRec *r, uint32_t first, uint32_t last) {
     VkCtx *c = vk_ctx();
+    int relieved = 0;
     plat_mutex_lock(&phys_lock);
     for (uint32_t i = first; i <= last && i < r->nchunks; i++) {
         if (r->chunks[i].alloc) continue;
         PhysChunk ch = {0};   // use 0: no part names it yet (MKW_GPU_GUARD read garbage there: --probe-vkmem stopped)
-        if (!alloc_chunk(c, chunk_len(r, i), &ch)) {
+        int got = alloc_chunk(c, chunk_len(r, i), &ch, !relieved, 0);
+        // Out of memory: once per call, what an image or a transient buffer gets (vk_mem_relieve: released and idle
+        // textures, the open upload batch sent, the GPU waited for), outside phys_lock as the GPU wait may be long.
+        // Steam Deck (1 GB UMA carve-out, low preset, 1.8.0 time trial, 13/11/2026): chunks failed while released
+        // render targets held 3 256 MiB, and still failed with a vk_texture_trim and retry alone.
+        // Once per call: with MKW_PHYS_LAZY=0 a call backs a range of chunks, and the ones after the first that
+        // failed try the heap that relieve freed, without relieving again.
+        if (got < 0) {
+            relieved = 1;
+            plat_mutex_unlock(&phys_lock);
+            vk_mem_relieve(2 * chunk_len(r, i) + (8ull << 20), "a physical pool chunk");
+            plat_mutex_lock(&phys_lock);
+            if (r->chunks[i].alloc) continue;   // another thread backed it meanwhile
+            got = alloc_chunk(c, chunk_len(r, i), &ch, 1, 0);
+        }
+        // Still full: system memory, slower but drawn. A chunk left without memory read as unmapped pages, and what
+        // the game had placed there drew wrong (#443, #221, #304: RTX 3050 4 GB, a dark band on the road and flicker).
+        if (got < 0) {
+            got = alloc_chunk(c, chunk_len(r, i), &ch, 0, 1);
+            if (got > 0 && phys_host_n++ < 4)
+                rt_log("vk: physical pool chunk of %#llx bytes in memory outside the GPU's own (device-local full)",
+                       (unsigned long long)chunk_len(r, i));
+        }
+        if (got <= 0) {
             if (++phys_failed_n <= 8) vram_log(0);
             continue;
         }

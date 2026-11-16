@@ -1,4 +1,4 @@
-<!-- translated from README.md c175259cbc98 -->
+<!-- translated from README.md dae9dd5efeb2 -->
 
 <p align="center"><img src="../logo.svg" width="128" alt="mkw-recomp logo"></p>
 
@@ -80,8 +80,8 @@ Nintendo SDK के फ़ंक्शन (`nn::*`) नाम से हमा�
 
 ## प्रदर्शन
 
-मापे गए फ़्रेम समय, हर एक अपनी तारीख़ के साथ, [docs/performance.md](../../docs/performance.md) में हैं। अपनी मशीन जोड़ने के लिए एक
-[प्रदर्शन रिपोर्ट](https://github.com/adriadam10/mkw-recomp/issues/new?template=performance.yml) खोलें: वह रिपोर्ट की तारीख़
+मापे गए फ़्रेम समय, हर एक अपने संस्करण के साथ, [docs/performance.md](../../docs/performance.md) में हैं। अपनी मशीन जोड़ने के लिए एक
+[प्रदर्शन रिपोर्ट](https://github.com/adriadam10/mkw-recomp/issues/new?template=performance.yml) खोलें: वह रिपोर्ट के संस्करण
 के साथ तालिका में जुड़ जाती है। ये समय गेम के अपने फ़्रेम हैं: फ़्रेम जनरेशन ज़्यादा फ़्रेम दिखाता है पर उन्हें छोटा नहीं करता।
 16.7 ms यानी 60 fps; Frame rate को Automatic (कंसोल वाला) पर रखने पर 60 न पहुँचने पर यह 30 fps पर आ जाता है, और 33.3 ms से
 लंबा फ़्रेम रेस को असली समय से धीमा चलाता है।

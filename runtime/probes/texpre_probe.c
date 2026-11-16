@@ -56,6 +56,20 @@ static double psnr(const uint8_t *a, const uint8_t *b, size_t n) {
     return se ? 10 * log10(255.0 * 255.0 * (double)n / se) : 99;
 }
 
+// The same over premultiplied colour (RGB times alpha, and alpha): what a blend shows, where the colour of a texel of
+// alpha 0 counts for nothing and its alpha for everything (issue #397's box came from alpha 1/255 there).
+static double psnr_pm(const uint8_t *a, const uint8_t *b, size_t n) {
+    double se = 0;
+    for (size_t i = 0; i < n; i += 4) {
+        for (int ch = 0; ch < 3; ch++) {
+            double x = a[i + ch] * a[i + 3] / 255.0, y = b[i + ch] * b[i + 3] / 255.0;
+            se += (x - y) * (x - y);
+        }
+        se += (double)(a[i + 3] - b[i + 3]) * (a[i + 3] - b[i + 3]);
+    }
+    return se ? 10 * log10(255.0 * 255.0 * (double)n / se) : 99;
+}
+
 // Level 0 of texture idx of a BNTX file of the romfs: linear ASTC blocks and the shape; NULL when it is not an ASTC 2D
 // texture of one layer.
 static uint8_t *bntx_level0(const char *rel, int idx, uint32_t *w, uint32_t *h, uint32_t *bw, uint32_t *bh, int *srgb) {
@@ -139,8 +153,9 @@ static int one(VkCtx *c, const char *rel, int idx, double *pg, double *pc) {
     if (ok) {
         vmaInvalidateAllocation(c->vma, ra, 0, VK_WHOLE_SIZE);
         *pg = psnr(ref, back, nt), *pc = psnr(ref, back + nt, nt);
-        printf("probe-texpre: %s %d %ux%u ASTC %ux%u%s: GPU mode 6 %.2f dB, bc7enc %.2f dB\n", rel, idx, w, h, bw, bh,
-               srgb ? " sRGB" : "", *pg, *pc);
+        printf("probe-texpre: %s %d %ux%u ASTC %ux%u%s: GPU mode 6 %.2f dB, bc7enc %.2f dB; premultiplied GPU %.2f dB, "
+               "bc7enc %.2f dB\n", rel, idx, w, h, bw, bh, srgb ? " sRGB" : "", *pg, *pc, psnr_pm(ref, back, nt),
+               psnr_pm(ref, back + nt, nt));
     }
     if (back) vmaDestroyBuffer(c->vma, rb, ra);
     vk_defer_image(g.img, g.alloc), vk_defer_image(k.img, k.alloc);

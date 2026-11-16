@@ -319,8 +319,34 @@ int rt_knob(const char *name, const char *def);
 extern volatile uint64_t nvn_timestamp_last; // nvn_ext.c: the counter timestamp the game read last (ticks)
 void frame_step_present(uint64_t display_ns, int interval); // nvnQueuePresentTexture: the frame's display time and
                                                            // present interval (60 Hz ticks)
+int frame_present_interval(void);   // the interval of the game's last present (1-4), any thread: frame generation's rate
+// MKW_FPS=auto (fps_auto.c): the present interval 1-4 from each frame's measured time, with hysteresis
+#define FPS_AUTO_MAX 4
+#define FPS_AUTO_HIST 120
+typedef struct {
+    double hist[FPS_AUTO_HIST], real[8];
+    unsigned head, n, since, n_real, hold, hold_s;
+    int iv, downed;
+    double stall_ms;   // how long the frames have been slower than any interval holds (fps_auto.c)
+    int fits;          // the last frames before it fitted the interval
+} FpsAuto;
+void fps_auto_reset(FpsAuto *a);                           // interval 1, no history
+int fps_auto_step(FpsAuto *a, double measured_ms, double real_ms);   // a frame's game measure and real period in,
+                                                                     // the interval to use out
+int probe_discord(void);                                   // discord_probe.c: Rich Presence against the local Discord
+int probe_fps(void);                                       // fps_probe.c: the controller on synthetic frame times
+void lat_input_read(void);                                 // vk_latency.c MKW_LATENCY: the game read the controller
+void lat_game_present(uint64_t slot);                      // ... and presented the frame shown at slot (pacer, ns)
+void lat_mark(const char *what);                           // ... a frame event, logged in MKW_PROBE's window
+// MKW_LOW_LATENCY (frame_jit.c): acquires wait until the next slot minus the frame's measured work
+void frame_jit_present(uint64_t slot, uint64_t acquired);  // nvnQueuePresentTexture: the frame's slot, its acquire (ns)
+void frame_jit_slack(uint64_t slot, int64_t slack);        // present thread: slot minus GPU done (< 0: not ready)
+uint64_t frame_jit_start(uint64_t next_slot);              // acquire: the time to wait until, 0 none
 void frame_rate_host(uint64_t patch_page);                 // game.c MKW_FPS: register its host function (patches.c)
 void frame_rate_init(uint64_t patch_page);                 // and point the frame object's vtable slot at it
+void race_scene_host(uint64_t patch_page);                 // race_scene.c: register its host function (patches.c)
+void race_scene_init(uint64_t patch_page);                 // point the race nodes' start slots at it (after seqwatch)
+int race_scene_on(void);                                   // the game is in a race (game.c: 20 and 15 fps only there)
 // ---- boot (boot.c, main.c)
 typedef struct { const char *exefs, *romfs, *profile; int boot; double seconds; const char *shot, *gpu, *profile_base; } RtConfig;
                                                            // profile: the player's folder (core/base/players.h);

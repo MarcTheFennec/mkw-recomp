@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "tools/prepare"))
 import prepare  # noqa: E402
 import gamesource  # noqa: E402  (after prepare: it puts recomp/ on the path)
 import gamecode  # noqa: E402
+import machine  # noqa: E402
 import spec  # noqa: E402
 import update  # noqa: E402
 
@@ -140,8 +141,22 @@ def test_clean_removes_old(tmp_path: Path, name: str) -> None:
     old = game / name
     old.mkdir() if name == "setup.old" else old.write_text("x")
     (game / "mkw.exe").write_text("keep")
-    update.clean(type("A", (), {"game": game})())
+    update.clean(type("A", (), {"game": game, "previous": None})())
     assert not old.exists() and not (game / "update").exists() and (game / "mkw.exe").exists()
+
+
+def test_clean_keeps_previous(tmp_path: Path) -> None:
+    # with --previous the replaced files go to update-previous/ under their own names, for the Tools page's Undo
+    game = tmp_path / ODD
+    (game / "update-previous").mkdir(parents=True)
+    (game / "update-previous/gone.dll").write_text("older still")
+    (game / "mkw.exe.old").write_text("0.1.10")
+    (game / "lang.old").mkdir()
+    update.clean(type("A", (), {"game": game, "previous": "0.1.10"})())
+    keep = game / "update-previous"
+    assert (keep / "mkw.exe").read_text() == "0.1.10" and (keep / "lang").is_dir()
+    assert (keep / "version").read_text().strip() == "0.1.10" and not (keep / "gone.dll").exists()
+    assert not list(game.glob("*.old"))
 
 
 def test_package_sources_import(tmp_path: Path) -> None:
@@ -399,3 +414,91 @@ def test_lastrun_reads_how_the_last_game_ended() -> None:
     assert lastrun.verdict("[host] FATAL: SIGSEGV at host 0x1\n", "0.1.11", sigs) == "crash"
     assert lastrun.verdict("[host] frame 300\n", "0.1.11", sigs) == ""   # killed or power off: nothing to say
     assert (ROOT / "tools/github/signatures.toml").is_file()
+
+
+@pytest.mark.parametrize("text", ['{"meta": {', "{}"])
+def test_broken_spec_not_reused(tmp_path: Path, text: str) -> None:
+    """A spec the decoder rejects is built again, not reused by every later setup (issue #325)."""
+    import shaderstep  # noqa: PLC0415
+
+    broken = tmp_path / "instructions.json"
+    broken.write_text(text)
+    assert not shaderstep.spec_loads(broken)
+    good = ROOT / "build/sm86/instructions.json"  # built on this machine, never in the repo
+    if good.is_file():
+        assert shaderstep.spec_loads(good)
+
+
+def test_chunk_key_ignores_generated_headers_it_does_not_include(tmp_path: Path) -> None:
+    """A new patch set rewrites the generated patches.h, which no chunk includes: it recompiled all 359 (16/11/2026)."""
+    gen = tmp_path / "gen"
+    (gen / "main").mkdir(parents=True)
+    patches, layout = gen / "patches.h", gen / "layout.h"
+    patches.write_text("#define RT_PATCH_COUNT 1\n")
+    layout.write_text("#define A 1\n")
+    chunk, uses = gen / "main/c0.c", gen / "main/c1.c"
+    chunk.write_text('#include "cpu.h"\n')
+    uses.write_text('#include "cpu.h"\n#include "layout.h"\n')
+    keys = lambda: [gamecode.chunk_base(["true"], "cpu", [layout, patches], s) for s in (chunk, uses)]  # noqa: E731
+    before = keys()
+    patches.write_text("#define RT_PATCH_COUNT 2\n")
+    assert keys() == before
+    layout.write_text("#define A 2\n")
+    after = keys()
+    assert after[0] == before[0] and after[1] != before[1]
+
+
+def test_ca_file_with_an_unreadable_windows_store(monkeypatch, tmp_path):
+    """Issue #456: the Windows store holds a certificate Python cannot parse, the context raises OSError (ASN1) and
+    the setup died before its first step; the pip bundle is used instead."""
+    pem = tmp_path / "Lib/site-packages/pip/_vendor/certifi/cacert.pem"
+    pem.parent.mkdir(parents=True)
+    pem.write_text("")
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.setattr(sys, "prefix", str(tmp_path))
+
+    def broken(*args, **kwargs):
+        raise OSError(-2146881269, "invalid ASN1 tag")
+
+    monkeypatch.setattr(prepare.update.ssl, "create_default_context", broken)
+    assert prepare.update.ca_file() == str(pem)
+
+
+def test_redo_exefs_if_missing(tmp_path: Path) -> None:
+    # #419: the exefs step was skipped by its key while game/exefs had no main, and generate stopped on the layout
+    state = {"done": {"exefs": "k", "romfs": "r"}}
+    prepare.redo_exefs_if_missing(state, tmp_path)
+    assert state["done"] == {"romfs": "r"}
+    (tmp_path / "exefs").mkdir()
+    (tmp_path / "exefs/main").write_text("x")
+    state = {"done": {"exefs": "k"}}
+    prepare.redo_exefs_if_missing(state, tmp_path)
+    assert state["done"] == {"exefs": "k"}
+
+
+def test_zig_caches_inside_the_game_folder(monkeypatch, tmp_path: Path) -> None:
+    # #439: in the user's cache folder zig's tmp/ to o/ rename failed with CrossDevice on one file system
+    monkeypatch.delenv("ZIG_GLOBAL_CACHE_DIR", raising=False)
+    monkeypatch.delenv("ZIG_LOCAL_CACHE_DIR", raising=False)
+    machine.use_own_zig_cache(tmp_path / "game")
+    own = str(tmp_path / "game/setup-work/zig-cache")
+    assert os.environ["ZIG_GLOBAL_CACHE_DIR"] == own and os.environ["ZIG_LOCAL_CACHE_DIR"] == own
+
+
+def test_zig_cache_the_players_own(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ZIG_GLOBAL_CACHE_DIR", str(tmp_path / "cache"))
+    machine.use_own_zig_cache(tmp_path / "game")
+    assert os.environ["ZIG_GLOBAL_CACHE_DIR"] == str(tmp_path / "cache")
+
+
+@pytest.mark.skipif(not shutil.which("cc"), reason="no C compiler")
+def test_damaged_generated_c_raises_to_regenerate(tmp_path: Path) -> None:
+    # #434: `uint6<NUL>_t` in a generated chunk; generate was skipped by its key, so every retry failed the same
+    src, out, stamp = tmp_path / "main_0203.c", tmp_path / "a.o", tmp_path / "a.key"
+    src.write_bytes(b"typedef unsigned long long uint64_t;\nuint6\0_t x;\n")
+    with pytest.raises(gamecode.DamagedSource, match="NUL bytes"):
+        gamecode.compile_one(["cc"], [], src, out, stamp, "k")
+    src.write_text("int x = ;\n")  # an ordinary error stays a message
+    assert gamecode.compile_one(["cc"], [], src, out, stamp, "k").startswith("main_0203.c: ")
+    src.write_text("int x = 1;\n")
+    assert gamecode.compile_one(["cc"], [], src, out, stamp, "k") == "" and stamp.read_text() == "k"

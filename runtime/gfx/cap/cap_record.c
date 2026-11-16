@@ -114,6 +114,29 @@ static uint64_t write_gpu_textures(int *count) {
         // A Vulkan sparse image's tiles go as CAP_SPARSE; a sparse NVN texture made whole (depth in RADV: the shadow
         // map array, cap-race10's first pass to differ from the game) goes here.
         if (st & VK_TEXCAP_SPARSE) continue;
+        // An ASTC texture decoded into another format has no blocks for ReadTexels to give (it answers zeros, and the
+        // replay decoded those as the error colour: tt4's course banner, an array filled by texture copies, replayed
+        // flat magenta): its image goes as it is, in slices of layers of at most SLICE bytes like the texels below.
+        VkTexDecoded dec;
+        if (vk_texture_decoded(t, &dec)) {
+            const uint64_t SLICE = 16ull << 20;
+            for (uint32_t l = 0; l < dec.levels; l++) {
+                uint32_t nz = dec.bytes[l] >= SLICE ? 1 : (uint32_t)(SLICE / dec.bytes[l]);
+                for (uint32_t z = 0; z < dec.layers; z += nz) {
+                    CapWimg w;
+                    memset(&w, 0, sizeof w);
+                    w.t = *t, w.format = (uint32_t)dec.format, w.level = l, w.layer = z;
+                    w.nlayers = dec.layers - z < nz ? dec.layers - z : nz;
+                    w.bytes = dec.bytes[l] * w.nlayers;
+                    if (w.bytes > cap && !(buf = realloc(buf, cap = w.bytes))) rt_fatal("cap: out of memory for texels");
+                    if (!vk_texture_decoded_copy(t, dec.format, l, z, w.nlayers, buf, w.bytes, 0)) continue;
+                    cap_out(out, CAP_WIMG, &w, sizeof w, buf, w.bytes);
+                    bytes += w.bytes;
+                }
+            }
+            ++*count;
+            continue;
+        }
         int is3d = t->d.target == NVN_TEXTURE_TARGET_3D;
         uint64_t tex_bytes = 0;
         for (uint32_t l = 0; l < (t->d.levels ? t->d.levels : 1); l++) {
@@ -192,7 +215,7 @@ static void maybe_start(void) {
     CapMeta m = {CAP_MAGIC, CAP_VERSION, (uint32_t)nvn_depth_minus_w(), presents + 1, (uint64_t)want_frames,
                  L->heap.base, 0, L->alias.base, L->stack.base};
     cap_out(out, CAP_META, &m, sizeof m, NULL, 0);
-    if (!cap_mem_snapshot(out)) rt_fatal("cap: this platform cannot list populated guest pages (Linux only)");
+    if (!cap_mem_snapshot(out)) rt_fatal("cap: this platform cannot list populated guest pages");
     uint64_t mem = cap_out_bytes(out);
     write_state();
     int ngpu = 0;

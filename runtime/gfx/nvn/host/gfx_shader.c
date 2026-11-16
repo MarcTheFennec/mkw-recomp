@@ -534,12 +534,25 @@ static const GfxShader *int_image_variant(GfxShader *s, const GfxShaderAnswers *
     GfxShader *v = mem_find(key);
     if (v) return v;
     uint64_t nw = 0;
-    uint32_t *code = spirv_int_images(s->spirv, s->words, a->img_uint, a->img_sint, &nw);
+    const char *why = NULL;
+    uint32_t *code = spirv_int_images(s->spirv, s->words, a->img_uint, a->img_sint, &nw, &why);
     if (!code) {
         static volatile int32_t n_fail;
-        if (plat_inc32(&n_fail) <= 8)
-            rt_log("gfx_shader: integer images %#llx/%#llx not patched in", (unsigned long long)a->img_uint,
-                   (unsigned long long)a->img_sint);
+        if (plat_inc32(&n_fail) <= 8) {
+            char hex[65];
+            key_hex(s->key, hex);
+            rt_log("gfx_shader: integer images %#llx/%#llx not patched in program %s: %s; using original shader",
+                   (unsigned long long)a->img_uint, (unsigned long long)a->img_sint, hex, why ? why : "unknown reason");
+            // Keep the failing input too: successful variants alone cannot reproduce a failed conversion offline.
+            const char *dd = cfg_get("MKW_SPIRV_INT_DUMP");
+            if (dd && *dd) {
+                char path[PATH_CAP + 128];
+                plat_file_mkdir_p(dd);
+                snprintf(path, sizeof path, "%s/%s-u%llx-s%llx.failed.spv", dd, hex,
+                         (unsigned long long)a->img_uint, (unsigned long long)a->img_sint);
+                plat_file_write(path, s->spirv, s->words * 4);
+            }
+        }
         return s;
     }
     if (!(v = calloc(1, sizeof *v)) || !(v->reflection = malloc(s->reflection_size + 1))) rt_fatal("gfx_shader: out of memory");

@@ -214,9 +214,43 @@ static void cb_log(uint64_t values) {
     memset(cb_cost, 0, sizeof cb_cost), cb_values = 0;
 }
 
-#define HANG_NS 5000000000ull   // no frame's submission takes seconds; a load's uploads are many short ones
+// A slow load can leave the timeline still for seconds; if it finishes, the report below says it was slow. The report
+// has to come before the kernel resets the GPU: under amdgpu's lockup_timeout (5 s for gfx on the Steam Deck, SteamOS's
+// amdgpu.lockup_timeout=5000,...) a 5 s report lost that race and mkw ended without a line (three hangs on
+// 13-14/11/2026, "ring gfx_0.0.0 timeout ... Process mkw"). So on amdgpu it comes after two fifths of the gfx
+// timeout (2 s on the Deck, at least 1 s), and elsewhere after 5 s as #297 validated it for NVIDIA (Xid 109).
+// An unavailable, empty or zero parameter leaves the kernel default unknown: current upstream uses 2 s, older kernels
+// used 10 s (docs.kernel.org/gpu/amdgpu/module-parameters.html and docs.kernel.org/5.16/gpu/amdgpu.html). Use 1 s then
+// so the report precedes the shortest documented default, even though slow loads may produce more reports.
+// MKW_GPU_HANG_MS sets it (0: no report).
+static uint64_t hang_ns(const VkCtx *c) {
+    const char *e = cfg_get("MKW_GPU_HANG_MS");
+    if (e && *e) return strtoull(e, NULL, 10) * 1000000ull;
+    uint64_t ms = 5000;
+#if defined(__linux__)
+    if (c->props.vendorID == 0x1002) {
+        FILE *f = fopen("/sys/module/amdgpu/parameters/lockup_timeout", "r");
+        long t = 0;   // the gfx timeout in ms is the first of the list; a negative value means no kernel timeout
+        int read = f ? fscanf(f, "%ld", &t) : 0;
+        if (read != 1 || t == 0) {
+            ms = 1000;
+            rt_log("vk: hang report after %llu ms (amdgpu lockup_timeout unavailable or default)",
+                   (unsigned long long)ms);
+        } else if (t > 0 && (uint64_t)t * 2 / 5 < ms) {
+            ms = (uint64_t)t * 2 / 5 < 1000 ? 1000 : (uint64_t)t * 2 / 5;
+            rt_log("vk: hang report after %llu ms (amdgpu lockup_timeout %ld ms)", (unsigned long long)ms, t);
+        }
+        if (f) fclose(f);
+    }
+#else
+    (void)c;
+#endif
+    return ms * 1000000ull;
+}
+
 static void completion_main(void *arg) {
     VkCtx *c = arg;
+    const uint64_t hang = hang_ns(c);
     plat_mutex_lock(&st_lock);
     for (;;) {
         while (!stop && done == issued && !(qn && queue[qhead].fence <= done))
@@ -236,14 +270,19 @@ static void completion_main(void *arg) {
             vkGetSemaphoreCounterValue(c->device, c->timeline, &reached);
             // A hang the driver never reports as a lost device (NVIDIA 620.70.06 on Linux, Xid 109 "CTX SWITCH
             // TIMEOUT", six times on 13/11/2026: this wait timed out for ever and the log named nothing; #13, #206):
-            // after HANG_NS without the timeline moving, the breadcrumbs say what the GPU had started and not finished.
+            // after `hang` without the timeline moving, the breadcrumbs say what the GPU had started and not finished.
+            // Once per stuck episode: a false report during a long load does not use up a later real one.
             static uint64_t stuck_since;   // this thread only
             static int hang_logged;
-            if (reached >= want) stuck_since = 0;
-            else if (!stuck_since) stuck_since = kern_now_ns();
-            else if (!hang_logged && kern_now_ns() - stuck_since >= HANG_NS) {
-                rt_log("vk: the GPU has not finished submission %llu in %d s and the driver reports no device loss",
-                       (unsigned long long)want, (int)(HANG_NS / 1000000000ull));
+            if (reached >= want) {
+                if (hang_logged)   // a long submission, not a hang: 4 of 22 Deck runs (0.1.11, 2 s), all in loads
+                    rt_log("vk: the GPU finished submission %llu after %.1f s: it was slow, not hung",
+                           (unsigned long long)want, (kern_now_ns() - stuck_since) / 1e9);
+                stuck_since = 0, hang_logged = 0;
+            } else if (!stuck_since) stuck_since = kern_now_ns();
+            else if (hang && !hang_logged && kern_now_ns() - stuck_since >= hang) {
+                rt_log("vk: the GPU has not finished submission %llu in %.1f s and the driver reports no device loss",
+                       (unsigned long long)want, hang / 1e9);
                 vk_crumbs_report_hang();
                 hang_logged = 1;
             }

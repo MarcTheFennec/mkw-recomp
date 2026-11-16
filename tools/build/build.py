@@ -10,9 +10,11 @@ code's tables (runtime/core/boot/gamelib.h: module layout, function tables, the 
 game copy, patch sets); build/obj/rt/defaults.c the default game paths; build/obj/rt/i18n/ the menu texts
 of every language, from i18n/*.po (tools/i18n/catalog.py).
 
---target windows cross-compiles build/mkw.exe from Linux with llvm-mingw and the MSYS2 UCRT64 libraries that
-tools/build/windeps.py puts in build/win (totk-pc-recomp's --toolchain build: its LLVM_LINK_LIBS). Objects go to
-build/obj-win. The window, input, keyboard and menu are SDL3 on both systems; platform/win32.c replaces platform/linux.c.
+--target windows builds build/mkw.exe with llvm-mingw and the MSYS2 UCRT64 libraries that tools/build/windeps.py puts
+in build/win (totk-pc-recomp's --toolchain build: its LLVM_LINK_LIBS), cross-compiled from Linux or on Windows itself,
+where it is the only target and ninja comes from PATH or else MSYS2 UCRT64 (C:/msys64/ucrt64/bin, MSYS2_UCRT64_BIN).
+Objects go to build/obj-win. The window, input, keyboard and menu are SDL3 on both systems; platform/win32.c replaces
+platform/linux.c.
 
 Usage: uv run tools/build/build.py [--target linux|windows] [--gen build/generated] [--exefs DIR] [--romfs DIR]
        [--jobs N] [--frame-pointers] [--dry-run]
@@ -24,6 +26,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -66,6 +69,12 @@ def set_arch(arch: str) -> None:
     RT_FLAGS[4:] = ARCH_FLAGS[arch]
 
 
+# Built on Windows itself (not cross-compiled from Linux): Ninja runs each command with CreateProcess, no shell, and
+# Windows caps a command line at 32 K characters; see windows_host_rules() and windows_host_ninja().
+HOST_WINDOWS = os.name == "nt"
+MSYS2_UCRT64_BIN = Path(os.environ.get("MSYS2_UCRT64_BIN", "C:/msys64/ucrt64/bin"))  # ninja, glslc, spirv-val
+
+
 @dataclass(frozen=True)
 class Target:
     cc: str
@@ -100,7 +109,26 @@ WINDOWS = Target(
 )  # fmt: skip
 
 
+def windows_memory_gb() -> tuple[float, float]:
+    """Windows' total and available physical memory in GiB (GlobalMemoryStatusEx, MEMORYSTATUSEX); OSError if the
+    call fails. Shared with tools/prepare/machine.py mem_available_gb."""
+    import ctypes
+
+    class Status(ctypes.Structure):  # MEMORYSTATUSEX
+        _fields_ = [("length", ctypes.c_uint32), ("load", ctypes.c_uint32), ("total", ctypes.c_uint64),
+                    ("avail", ctypes.c_uint64), ("rest", ctypes.c_uint64 * 5)]  # fmt: skip
+
+    st = Status(length=ctypes.sizeof(Status))
+    if not ctypes.WinDLL("kernel32", use_last_error=True).GlobalMemoryStatusEx(ctypes.byref(st)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return st.total / 2**30, st.avail / 2**30
+
+
 def mem_total_gb() -> float:
+    """The machine's memory in GiB, for the job counts (build.py --job-mem-gb, prepare.py fit). Windows has no
+    /proc/meminfo."""
+    if os.name == "nt":
+        return windows_memory_gb()[0]
     with open("/proc/meminfo") as f:
         for line in f:
             if line.startswith("MemTotal:"):
@@ -126,7 +154,9 @@ def game_id() -> str:
     another id is not loaded (runtime/core/boot/gamelib.c)."""
     h = hashlib.sha256(" ".join(GEN_FLAGS).encode())
     for p in sorted([*(RUNTIME / "cpu").glob("*.h"), RUNTIME / "core/boot/gamelib.h"]):
-        h.update(p.read_bytes())
+        # without CRs: Git for Windows checks out with CRLF (core.autocrlf=true), and a runtime built from such a clone
+        # refused the release's mkwgame.dll of the same headers as "built for another version" (16/11/2026)
+        h.update(p.read_bytes().replace(b"\r\n", b"\n"))
     return h.hexdigest()[:16]
 
 
@@ -236,15 +266,21 @@ def ninja_file(target: Target, gen: Path, out: Path, rt_extra: list[str], dist: 
             f"rule tabcc\n  command = {cc} -std=gnu11 $tabflags -MD -MF $out.d -c $in -o $out\n"
             "  depfile = $out.d\n  deps = gcc\n  description = cc $in"
         ),
-        f"rule ar\n  command = rm -f $out && {target.ar} rcs $out $in\n  description = ar $out",
-        (
-            f"rule solink\n  command = {' '.join([target.cc, *(sys_flags or [])])} -shared -fuse-ld=lld -o $out $in $solibs"
-            "\n  description = link $out"
-        ),
-        (
-            f"rule link\n  command = {target.cxx} $ldflags -o $out $in {' '.join(target.link_libs)}"
-            "\n  description = link $out"
-        ),
+        *(
+            windows_host_rules(target)
+            if HOST_WINDOWS
+            else [
+                f"rule ar\n  command = rm -f $out && {target.ar} rcs $out $in\n  description = ar $out",
+                (
+                    f"rule solink\n  command = {' '.join([target.cc, *(sys_flags or [])])} -shared -fuse-ld=lld -o $out $in $solibs"
+                    "\n  description = link $out"
+                ),
+                (
+                    f"rule link\n  command = {target.cxx} $ldflags -o $out $in {' '.join(target.link_libs)}"
+                    "\n  description = link $out"
+                ),
+            ]
+        ),  # fmt: skip
         f"rule rc\n  command = {target.windres} -O coff -I {out / 'rt/platform'} $in -o $out\n  description = rc $in",
         f"rule icon\n  command = {sys.executable} $in $out\n  description = icon $out",
     ]
@@ -295,6 +331,32 @@ def ninja_file(target: Target, gen: Path, out: Path, rt_extra: list[str], dist: 
     return "\n".join(lines) + "\n"
 
 
+def windows_host_rules(target: Target) -> list[str]:
+    """ar, solink and link when Ninja runs on Windows. No shell: "rm -f $out && ..." would hand rm the "&&", the
+    archiver and every object as files to delete. The object lists go through response files (the game's archive and
+    the link pass the 32 K command-line limit); clang reads a response file the GNU way by default, where a backslash
+    escapes, so the links ask for Windows quoting. llvm-ar replaces members by name, so without the rm a chunk that
+    disappears stays in its archive until build/obj-win is cleaned."""
+    rsp = "\n  rspfile = $out.rsp\n  rspfile_content = $in"
+    return [
+        f"rule ar\n  command = {target.ar} rcs $out @$out.rsp{rsp}\n  description = ar $out",
+        (
+            f"rule solink\n  command = {target.cc} -shared -fuse-ld=lld --rsp-quoting=windows -o $out @$out.rsp"
+            f" $solibs{rsp}\n  description = link $out"
+        ),
+        (
+            f"rule link\n  command = {target.cxx} $ldflags --rsp-quoting=windows -o $out @$out.rsp"
+            f" {' '.join(target.link_libs)}{rsp}\n  description = link $out"
+        ),
+    ]
+
+
+def windows_host_ninja(text: str) -> str:
+    """Ninja reads the ":" of a drive letter in a build line as the end of its outputs: escape it ($:)."""
+    drive = re.compile(r"(?<![$\w])([A-Za-z]):(?=[\\/])")
+    return "\n".join(drive.sub(r"\1$:", line) if line.startswith("build ") else line for line in text.split("\n"))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--gen", type=Path, default=ROOT / "build/generated")
@@ -326,8 +388,15 @@ def main() -> None:
         help="runtime with frame pointers: perf call graphs (-g) of where threads block, e.g. -e cs",
     )
     args = ap.parse_args()
+    # Absolute, not resolved (game/ is a link): ninja puts $in in each command and ccache hashes the input's path, so a
+    # relative --gen next to the absolute default rebuilt all 623 objects for real on every switch (16/11/2026).
+    for name in ("gen", "exefs", "romfs", "out"):
+        if getattr(args, name):
+            setattr(args, name, getattr(args, name).absolute())
     if args.runtime_only and not args.dist:
         ap.error("--runtime-only needs --dist")
+    if HOST_WINDOWS and args.target != "windows":
+        ap.error("on Windows only --target windows builds (mkw.exe)")
     target = WINDOWS if args.target == "windows" else LINUX
     if args.arch != "x86_64" and target is WINDOWS:
         ap.error("--target windows is x86_64 only")
@@ -341,6 +410,9 @@ def main() -> None:
     dist = ROOT / "build/dist" / (args.target + (f"-{ARCH}" if cross else "")) if args.dist else None
     args.out = args.out or ROOT / ("build/obj" + ("-dist" if dist else "") + ("-win" if target is WINDOWS else "")
                                    + (f"-{ARCH}" if cross else ""))  # fmt: skip
+    if HOST_WINDOWS and not shutil.which("ninja") and (MSYS2_UCRT64_BIN / "ninja.exe").is_file():
+        # at the end, as windeps.py does: what PATH already has stays first
+        os.environ["PATH"] = f"{os.environ['PATH']}{os.pathsep}{MSYS2_UCRT64_BIN}"
     for tool in (target.cc, target.cxx, "ninja", target.ar):
         if not shutil.which(tool):
             sys.exit(f"{tool} not found" + (" (uv run tools/build/windeps.py)" if target is WINDOWS else ""))
@@ -360,12 +432,13 @@ def main() -> None:
         dist.mkdir(parents=True, exist_ok=True)
         (dist / "mkwgame.id").write_text(game_id())
     fp = ["-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer"] if args.frame_pointers else []
-    (args.out / "build.ninja").write_text(
+    ninja = (
         # the lifted code and its library take the sysroot only for another CPU: an x86-64 release's stay as they were
         ninja_file(
             target, args.gen, args.out, fp + sys_flags, dist, args.runtime_only, sys_ld, sys_flags if cross else None
         )
     )
+    (args.out / "build.ninja").write_text(windows_host_ninja(ninja) if HOST_WINDOWS else ninja)
     if target is LINUX and not dist:
         write_compile_db(args.out / "build.ninja")
     cmd = ["ninja", "-f", str(args.out / "build.ninja"), "-j", str(jobs)] + (["-n"] if args.dry_run else [])

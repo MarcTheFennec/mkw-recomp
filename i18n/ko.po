@@ -16,9 +16,10 @@ msgctxt "UI_MENU_TAB_SCREEN"
 msgid "Screen"
 msgstr "화면"
 
-msgctxt "UI_MENU_TAB_GAME"
-msgid "Game"
-msgstr "게임"
+#. The settings tab with the game's and the menu's language, LAN play and the update check.
+msgctxt "UI_MENU_TAB_GENERAL"
+msgid "General"
+msgstr "일반"
 
 msgctxt "UI_MENU_TAB_SOUND"
 msgid "Sound"
@@ -27,10 +28,6 @@ msgstr "사운드"
 msgctxt "UI_MENU_TAB_CONTROLS"
 msgid "Controls"
 msgstr "조작"
-
-msgctxt "UI_MENU_TAB_MENU"
-msgid "Menu"
-msgstr "메뉴"
 
 msgctxt "UI_MENU_TAB_ADVANCED"
 msgid "Advanced"
@@ -131,9 +128,33 @@ msgctxt "UI_MENU_QUICK_RACE_TT"
 msgid "Time trial"
 msgstr "타임 어택"
 
+msgctxt "UI_MENU_QUICK_RACE_GP"
+msgid "Grand Prix"
+msgstr ""
+
 msgctxt "UI_MENU_QUICK_RACE_FREE"
 msgid "Free roam"
 msgstr "프리 런"
+
+msgctxt "UI_MENU_CLASSIC_GP"
+msgid "Classic Grand Prix"
+msgstr ""
+
+msgctxt "UI_MENU_CLASSIC_GP_DESC"
+msgid ""
+"Grand Prix races take place on each course instead of the road to it. Knockout Tour is unchanged. "
+"Changes take several seconds and affect races started afterward."
+msgstr ""
+
+msgctxt "UI_MENU_CLASSIC_VS"
+msgid "Classic VS races"
+msgstr ""
+
+msgctxt "UI_MENU_CLASSIC_VS_DESC"
+msgid ""
+"VS races after the first take place on the next course instead of the road to it, whatever the "
+"course rule. Changes take several seconds and affect races started afterward."
+msgstr ""
 
 msgctxt "UI_MENU_ANISO"
 msgid "Texture filtering"
@@ -399,11 +420,13 @@ msgstr "프레임 레이트"
 
 msgctxt "UI_MENU_FPS_DESC"
 msgid ""
-"Frames per second the game aims for. Automatic is the console's: 60, or 30 when a frame takes too "
-"long. If your computer cannot hold 60, choose 30 so the race runs at its real speed."
+"Frames per second the game aims for. Automatic lowers it from 60 to 30, 20 or 15 when frames take "
+"too long, so the race always runs at its real speed. At 20 or 15, Frame generation can show the "
+"frames in between. 20 and 15 apply only in races: menus, movies and loading screens go at 30 at "
+"most, as on the console."
 msgstr ""
-"게임이 목표로 하는 초당 프레임 수입니다. 「자동」은 콘솔과 같아서 60이며, 한 프레임이 너무 오래 걸리면 30이 됩니다. 컴퓨터가 60을 유지하지 못한다면 30으로 "
-"설정해야 레이스가 원래 속도로 진행됩니다."
+"게임이 목표로 하는 초당 프레임 수입니다. 「자동」은 한 프레임이 너무 오래 걸리면 60에서 30, 20 또는 15로 낮추어 레이스가 항상 실제 속도로 진행되게 합니다. 20 "
+"또는 15에서는 프레임 생성으로 중간 프레임을 표시할 수 있습니다. 20과 15는 레이스에서만 적용됩니다. 메뉴, 동영상, 로딩 화면은 콘솔과 같이 최대 30으로 실행됩니다."
 
 msgctxt "UI_MENU_FPS_AUTO"
 msgid "Automatic"
@@ -415,12 +438,41 @@ msgstr "프레임 생성"
 
 msgctxt "UI_MENU_FRAMEGEN_DESC"
 msgid ""
-"Shows frames made between the game's own: 2x turns 30 fps into 60. Automatic makes as many as "
-"your monitor's refresh rate has room for. Adds up to one frame of delay, and fast motion can "
+"Shows frames made between the game's own: 2x turns 30 fps into 60. Automatic makes only as many "
+"as divide your monitor's refresh rate evenly. Adds up to one frame of delay, and fast motion can "
 "smear. Not on the console."
 msgstr ""
-"게임 자체 프레임 사이에 만든 프레임을 표시합니다. 2x는 30fps를 60fps로 만듭니다. 「자동」은 모니터의 주사율이 허용하는 만큼 생성합니다. 최대 1프레임의 지연이 "
-"생기며, 빠른 움직임이 번져 보일 수 있습니다. 콘솔에는 없는 기능입니다."
+"게임 프레임 사이에 만든 프레임을 보여 줍니다. 2x는 30 fps를 60으로 만듭니다. 자동은 모니터 주사율을 균등하게 나누는 만큼만 만듭니다. 최대 1프레임의 지연이 "
+"생기고 빠른 움직임은 번질 수 있습니다. 콘솔에는 없는 기능입니다."
+
+msgctxt "UI_MENU_FRAMEGEN_UNEVEN"
+msgid ""
+"At the game's frame rate now, this factor does not divide your screen's refresh rate evenly: "
+"motion judders. Automatic avoids it."
+msgstr "지금 게임 프레임 속도에서는 이 배율이 화면 주사율을 균등하게 나누지 못해 움직임이 끊깁니다. 자동은 이를 피합니다."
+
+msgctxt "UI_MENU_VRR"
+msgid "Variable refresh screen"
+msgstr "가변 주사율 화면"
+
+msgctxt "UI_MENU_VRR_DESC"
+msgid ""
+"Turn on if your screen has FreeSync or G-Sync and it is enabled. Off, Automatic frame generation "
+"only makes the frames that divide the refresh rate evenly, so motion does not judder."
+msgstr ""
+"화면에 FreeSync 또는 G-Sync가 있고 켜져 있으면 켜세요. 끄면 자동 프레임 생성은 주사율을 균등하게 나누는 프레임만 만들어 움직임이 끊기지 않게 합니다."
+
+msgctxt "UI_MENU_LOW_LATENCY"
+msgid "Low latency"
+msgstr "낮은 지연 시간"
+
+msgctxt "UI_MENU_LOW_LATENCY_DESC"
+msgid ""
+"Starts each frame as late as your computer allows, so what you press reaches the screen sooner. "
+"Matters most at 20 or 15 fps and with Frame generation. Turn it off if the picture stutters."
+msgstr ""
+"컴퓨터가 허용하는 만큼 최대한 늦게 각 프레임을 시작해서, 누른 입력이 화면에 더 빨리 나타나게 합니다. 20fps나 15fps일 때, 그리고 프레임 생성과 함께 쓸 때 가장 "
+"효과가 큽니다. 화면이 끊기면 끄는 것이 좋습니다."
 
 msgctxt "UI_MENU_GRAPHICS"
 msgid "Picture"
@@ -483,6 +535,43 @@ msgstr "FSR 선명도"
 msgctxt "UI_MENU_SHARPNESS_DESC"
 msgid "Sharpening after FSR scaling; 0 turns it off."
 msgstr "FSR 확대 후의 샤프닝 정도입니다. 0이면 사용하지 않습니다."
+
+#. Under Sharpness, greyed out, when the upscaler is not AMD FSR 1.
+msgctxt "UI_MENU_SHARPNESS_FSR_ONLY"
+msgid "With AMD FSR 1 only"
+msgstr "AMD FSR 1 전용"
+
+#. Group heading on the Graphics tab: internal resolution and upscaling.
+msgctxt "UI_MENU_GROUP_RESOLUTION"
+msgid "Resolution"
+msgstr "해상도"
+
+#. Group heading on the Graphics tab: frame rate, frame generation, overlay.
+msgctxt "UI_MENU_GROUP_PERFORMANCE"
+msgid "Performance"
+msgstr "성능"
+
+#. Graphics tab button: Auto-set.
+msgctxt "UI_MENU_AUTOSET"
+msgid "Best settings for this PC"
+msgstr "이 PC에 최적의 설정"
+
+#. Description of Best settings for this PC.
+msgctxt "UI_MENU_AUTOSET_DESC"
+msgid ""
+"Picks the Quality preset, the internal resolution and AMD FSR 1 from your graphics card and "
+"screen. A first guess: change anything afterwards."
+msgstr "그래픽 카드와 화면을 보고 품질 프리셋, 내부 해상도, AMD FSR 1을 선택합니다. 첫 추정치이니 나중에 원하는 대로 바꾸세요."
+
+#. Puts back what Best settings for this PC changed.
+msgctxt "UI_MENU_AUTOSET_UNDO"
+msgid "Undo best settings"
+msgstr "최적 설정 실행 취소"
+
+#. Description of Undo best settings.
+msgctxt "UI_MENU_AUTOSET_UNDO_DESC"
+msgid "Puts back the rows Best settings for this PC changed."
+msgstr "«이 PC에 최적의 설정»이 바꾼 항목을 원래대로 되돌립니다."
 
 msgctxt "UI_MENU_GAME_LANG"
 msgid "Game language"
@@ -2093,11 +2182,6 @@ msgid ""
 msgstr "셰이더를 교체합니다. 포트는 설정 중에 게임의 셰이더를 변환하므로 이 모드가 표시되지 않거나 화면이 깨질 수 있습니다"
 
 #. printf format: keep every %... conversion, in the same order.
-msgctxt "UI_LAUNCH_UPDATE"
-msgid "Update to %s (%d MB)"
-msgstr "%s(으)로 업데이트(%d MB)"
-
-#. printf format: keep every %... conversion, in the same order.
 msgctxt "UI_LAUNCH_UPDATE_FETCHING"
 msgid "Downloading %s"
 msgstr "%s 다운로드 중"
@@ -2111,6 +2195,297 @@ msgstr "업데이트 실패: %s"
 msgctxt "UI_LAUNCH_UPDATED"
 msgid "Updated to %s: setting up again what it changed"
 msgstr "%s(으)로 업데이트했습니다. 변경된 부분을 다시 설정합니다"
+
+#. The update card's title; %s is the release (v0.1.12).
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_LAUNCH_UPDATE_TITLE"
+msgid "Update available: %s"
+msgstr "업데이트 가능: %s"
+
+#. Under it: %s the version in use, %d the download in MB.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_LAUNCH_UPDATE_DETAIL"
+msgid "You have %s · %d MB to download"
+msgstr "%s · %d MB 다운로드 예정"
+
+#. The update card's button: downloads and installs it.
+msgctxt "UI_LAUNCH_UPDATE_NOW"
+msgid "Update"
+msgstr "업데이트"
+
+#. Opens the release's notes on GitHub.
+msgctxt "UI_LAUNCH_WHATS_NEW"
+msgid "What's new"
+msgstr "새로운 점"
+
+#. After a failed download.
+msgctxt "UI_LAUNCH_RETRY"
+msgid "Try again"
+msgstr "다시 시도"
+
+#. The game files' state with the game version the setup installed.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_LAUNCH_FILES_READY_AS"
+msgid "Game files ready (version %s)"
+msgstr "게임 파일 준비 완료(버전 %s)"
+
+#. Under Play: %s is the first controller's name.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_LAUNCH_PAD"
+msgid "Controller: %s"
+msgstr "컨트롤러: %s"
+
+#. Under Play when no controller is connected.
+msgctxt "UI_LAUNCH_PAD_NONE"
+msgid "No controller connected"
+msgstr "연결된 컨트롤러가 없습니다"
+
+#. On the controller row: opens the Controls tab.
+msgctxt "UI_LAUNCH_CONFIGURE"
+msgid "Configure"
+msgstr "설정"
+
+#. Offered once on the start screen after the setup.
+msgctxt "UI_LAUNCH_SHORTCUT_ASK"
+msgid "Start the game from your desktop"
+msgstr "데스크톱에서 플레이"
+
+#. Makes the desktop shortcut.
+msgctxt "UI_LAUNCH_SHORTCUT_MAKE"
+msgid "Create shortcut"
+msgstr "바로 가기 만들기"
+
+#. Puts the offer away; the button stays on the Game files page.
+msgctxt "UI_LAUNCH_NOT_NOW"
+msgid "Not now"
+msgstr "지금 안 함"
+
+#. The keys, at the lower right of the start screen.
+msgctxt "UI_LAUNCH_KEYS"
+msgid "Enter or A: select · F11: fullscreen"
+msgstr "Enter 또는 A: 선택 · F11: 전체 화면"
+
+#. Beside the Settings title on the start screen.
+msgctxt "UI_LAUNCH_SETTINGS_NOTE"
+msgid "Changes are saved and apply when you press Play"
+msgstr "변경 사항은 저장되며 플레이를 누를 때 적용됩니다"
+
+#. Step 1 of the setup before the player picks their copy.
+msgctxt "UI_LAUNCH_NO_SOURCE"
+msgid "No copy chosen yet"
+msgstr "아직 사본을 선택하지 않았습니다"
+
+#. Under Copy into the game folder.
+msgctxt "UI_LAUNCH_ROMFS_COPY_NOTE"
+msgid "Uses 23 GB more disk space; your copy can be deleted afterwards"
+msgstr "디스크를 23 GB 더 사용합니다. 나중에 사본을 지울 수 있습니다"
+
+#. Under Use it where it is.
+msgctxt "UI_LAUNCH_ROMFS_LINK_NOTE"
+msgid "No extra disk space; your copy has to stay where it is"
+msgstr "추가 디스크 공간이 필요 없습니다. 사본은 원래 자리에 있어야 합니다"
+
+#. Under Set up: %s is the game folder.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_LAUNCH_INSTALLS_TO"
+msgid "Installs to %s"
+msgstr "%s에 설치합니다"
+
+#. What a setup installed: label.
+msgctxt "UI_LAUNCH_INFO_VERSION"
+msgid "Game version"
+msgstr "게임 버전"
+
+#. What a setup installed: label; the value is MKW Recomp and its version.
+msgctxt "UI_LAUNCH_INFO_PORT"
+msgid "Set up by"
+msgstr "설치한 버전"
+
+#. What a setup installed: label; the value says how it is kept.
+msgctxt "UI_LAUNCH_INFO_ROMFS"
+msgid "RomFS"
+msgstr "RomFS"
+
+#. How the RomFS is kept, after the setup.
+msgctxt "UI_LAUNCH_ROMFS_COPIED"
+msgid "Copied into the game folder"
+msgstr "게임 폴더로 복사됨"
+
+#. How the RomFS is kept, after the setup.
+msgctxt "UI_LAUNCH_ROMFS_LINKED"
+msgid "Used where it is"
+msgstr "현재 위치에서 사용 중"
+
+#. Shows the game folder in the file manager.
+msgctxt "UI_LAUNCH_OPEN_FOLDER"
+msgid "Open folder"
+msgstr "폴더 열기"
+
+#. Under Set up again, folded on the Game files page once the game is set up.
+msgctxt "UI_LAUNCH_SETUP_AGAIN_HINT"
+msgid "After a game update, or when the game files look damaged. The steps already done are kept."
+msgstr "게임 업데이트 후, 또는 게임 파일이 손상된 것처럼 보일 때. 이미 한 단계는 그대로 유지됩니다."
+
+#. The start screen's page with the saves, the shortcuts, the updates and reporting a problem.
+msgctxt "UI_LAUNCH_TOOLS"
+msgid "Tools"
+msgstr "도구"
+
+#. Tools page heading.
+msgctxt "UI_TOOLS_SAVES"
+msgid "Saves"
+msgstr "세이브"
+
+#. Tools page row.
+msgctxt "UI_TOOLS_BACKUP"
+msgid "Back up saves"
+msgstr "세이브 백업"
+
+#. Under Back up saves: %s is the player's name.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_BACKUP_NOTE"
+msgid "A zip of %s's saves in the game folder's backups"
+msgstr "게임의 backups 폴더에 %s 세이브를 zip으로"
+
+#. After a backup: %s is the zip file.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_BACKUP_DONE"
+msgid "Saved: %s"
+msgstr "저장됨: %s"
+
+#. Button of Back up saves.
+msgctxt "UI_TOOLS_BACKUP_BUTTON"
+msgid "Back up"
+msgstr "백업 만들기"
+
+#. Tools page row with the two folders' buttons.
+msgctxt "UI_TOOLS_SAVES_FOLDERS"
+msgid "Saves and backups"
+msgstr "세이브와 백업"
+
+#. Shows the player's saves folder.
+msgctxt "UI_TOOLS_OPEN_SAVES"
+msgid "Open saves"
+msgstr "세이브 열기"
+
+#. Shows the backups folder.
+msgctxt "UI_TOOLS_OPEN_BACKUPS"
+msgid "Open backups"
+msgstr "백업 열기"
+
+#. Tools page heading.
+msgctxt "UI_TOOLS_SHORTCUTS"
+msgid "Shortcuts"
+msgstr "바로 가기"
+
+#. Tools page row.
+msgctxt "UI_TOOLS_STEAM"
+msgid "Add to Steam"
+msgstr "Steam에 추가"
+
+#. Under Add to Steam.
+msgctxt "UI_TOOLS_STEAM_NOTE"
+msgid "As a non-Steam game, for Big Picture and the Steam Deck"
+msgstr "Steam 게임이 아닌 게임으로, Big Picture와 Steam Deck용"
+
+#. Button of Add to Steam.
+msgctxt "UI_TOOLS_ADD"
+msgid "Add"
+msgstr "추가"
+
+#. After Add to Steam.
+msgctxt "UI_TOOLS_STEAM_DONE"
+msgid "Added to Steam"
+msgstr "Steam에 추가됨"
+
+#. After Add to Steam while Steam runs.
+msgctxt "UI_TOOLS_STEAM_RESTART"
+msgid "Added: restart Steam to see it"
+msgstr "추가됨: 보려면 Steam을 다시 시작하세요"
+
+#. Why Add to Steam failed.
+msgctxt "UI_TOOLS_STEAM_NONE"
+msgid "Steam is not installed for this user"
+msgstr "이 사용자에게는 Steam이 설치되어 있지 않습니다"
+
+#. Tools page heading.
+msgctxt "UI_TOOLS_UPDATES"
+msgid "Updates"
+msgstr "업데이트"
+
+#. The version in use: %s.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_VERSION"
+msgid "Version %s"
+msgstr "버전 %s"
+
+#. Looks for a new version.
+msgctxt "UI_TOOLS_CHECK"
+msgid "Check now"
+msgstr "지금 확인"
+
+#. While the check runs.
+msgctxt "UI_TOOLS_CHECKING"
+msgid "Checking for a new version..."
+msgstr "새 버전을 확인하는 중..."
+
+#. Tools page row: %s is the version before the last update.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_UNDO_ROW"
+msgid "Go back to %s"
+msgstr "%s(으)로 돌아가기"
+
+#. Under Go back to.
+msgctxt "UI_TOOLS_UNDO_NOTE"
+msgid "The version before the last update; the launcher starts again"
+msgstr "마지막 업데이트 이전 버전. 런처가 다시 열립니다"
+
+#. Button that puts back the version before the last update.
+msgctxt "UI_TOOLS_UNDO"
+msgid "Undo update"
+msgstr "업데이트 실행 취소"
+
+#. Confirmation: %s is that version.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_UNDO_ASK"
+msgid "Go back to %s? The launcher starts again and sets up again what differs."
+msgstr "%s(으)로 돌아갈까요? 런처가 다시 열리고 달라진 부분을 다시 설정합니다."
+
+#. Tools page heading.
+msgctxt "UI_TOOLS_PROBLEMS"
+msgid "Problems"
+msgstr "문제"
+
+#. Tools page row.
+msgctxt "UI_TOOLS_REPORT"
+msgid "Report a problem"
+msgstr "문제 신고"
+
+#. Under Report a problem.
+msgctxt "UI_TOOLS_REPORT_NOTE"
+msgid "Copies your system's details and opens the bug report form, to paste them in"
+msgstr "시스템 정보를 복사하고 붙여넣을 오류 신고 양식을 엽니다"
+
+#. Button of Report a problem.
+msgctxt "UI_TOOLS_REPORT_BUTTON"
+msgid "Report"
+msgstr "신고"
+
+#. After Report.
+msgctxt "UI_TOOLS_REPORT_COPIED"
+msgid "Your system's details are on the clipboard: paste them in the form"
+msgstr "시스템 정보가 클립보드에 있습니다. 양식에 붙여넣으세요"
+
+#. Tools page row with the log folder's button.
+msgctxt "UI_TOOLS_LOGS"
+msgid "Logs"
+msgstr "로그"
+
+#. A Tools page action that did not work: %s says why.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_FAILED"
+msgid "Failed: %s"
+msgstr "실패: %s"
 
 msgctxt "UI_LAUNCH_NO_GAME_DATA"
 msgid "Your own copy of the game · No game data included"
@@ -2155,13 +2530,19 @@ msgid ""
 "seconds at most, nothing offline)."
 msgstr "시작할 때 GitHub에서 이 포트의 새 릴리스를 확인하고 시작 화면에서 안내합니다(길어야 몇 초이며, 오프라인에서는 아무것도 하지 않습니다)."
 
+msgctxt "UI_MENU_DISCORD"
+msgid "Discord status"
+msgstr ""
+
+msgctxt "UI_MENU_DISCORD_DESC"
+msgid ""
+"While the game runs, your Discord profile shows that you are playing, for how long, and whether "
+"you are racing or in the menus. Your Discord friends see it too."
+msgstr ""
+
 msgctxt "UI_LAUNCH_PLAYERS"
 msgid "Profiles"
 msgstr "프로필"
-
-msgctxt "UI_LAUNCH_PLAYER"
-msgid "Profile: %s"
-msgstr "프로필: %s"
 
 msgctxt "UI_PLAYER_NOTE"
 msgid ""

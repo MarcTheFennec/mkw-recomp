@@ -1,6 +1,7 @@
 // Hacks that the console does not have, for playing and above all for developing faster: each
 // one off by default, with its MKW_* key for the scripts and its row in the Hacks tab (ui/menu/settings_tabs.cpp).
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 
 // ---- turbo (turbo.c): the game runs `speed` times faster. MKW_TURBO = off | hold | toggle (F2) | on | until,
@@ -16,6 +17,7 @@ int turbo_drop_present(uint64_t now_ns);   // 1: leave this frame out of the win
 // ---- skip movies (skip.c): MKW_SKIP_MOVIES=1 presses A while a cup opening plays
 void skip_file_opened(const char *path);   // fs_host.c: a romfs file opened
 void skip_movie_closed(void);              // ov_codec.c: a VP9 decoder finalized
+int skip_opening_playing(void);            // a cup opening's file opened and its decoder not closed yet (game.c)
 void skip_input(uint64_t *buttons);        // input.c: the buttons the game gets this tick
 
 // ---- fixed seed (seed.c): MKW_SEED=<number> for the system's random entropy
@@ -29,3 +31,8 @@ void freeze_present(void);               // the game's present: waits while froz
 
 // ---- unlock everything (unlock.c): MKW_UNLOCK_ALL=1 edits Play/account.sav when the game opens it
 int unlock_save(uint8_t *save, uint64_t size);  // the changes made; 0 for a save of another layout
+
+// ---- Classic Grand Prix and VS (classic.c): MKW_CLASSIC_GP=1 / MKW_CLASSIC_VS=1, every race of a Grand Prix cup / of
+// VS is laps on one course
+void classic_seen(void *p, size_t n);      // ov_zstd.c: n bytes the host zstd decoder wrote (the archive, when it is)
+void classic_poll(void);                   // menu.cpp, each frame: a setting changed, the game's copies follow

@@ -79,7 +79,7 @@ int rec_class(const PoolRec *r);
 
 // vk_mem_back.c: GPU storage of each kind of pool
 extern PlatMutex phys_lock;
-extern int64_t phys_backed_n, phys_backed_bytes, phys_failed_n, placed_n, placed_bytes;
+extern int64_t phys_backed_n, phys_backed_bytes, phys_failed_n, phys_host_n, placed_n, placed_bytes;
 VkBufferUsageFlags pool_usage(const VkCtx *c);
 uint64_t phys_chunk(void);
 int phys_lazy(void);

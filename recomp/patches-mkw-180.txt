@@ -1,6 +1,7 @@
 # Code patches of MKW 1.8.0 (exefs/main build id d00e4f399e411d06; recomp/versions.py). The same sets as
 # recomp/patches-mkw.txt (1.0.0), found again in this executable; that file says what each set does and why.
-# Every set of 1.0.0 is here (aspect, shadow and seed since 13/11/2026); seed has 18 of 1.0.0's 21 sites (below).
+# Every set of 1.0.0 is here (aspect, shadow and seed since 13/11/2026, lan since 15/11/2026); seed has 18 of 1.0.0's
+# 21 sites (below).
 #
 # Spin waits (tools/cpu/spin_waits.py --modules main,subsdk0,subsdk1,sdk, 11/11/2026).
 # main: 81 spin waits
@@ -105,6 +106,13 @@ spin sdk 349840 349850   # 5 instructions; loads
 spin sdk 5ce968 5ce980   # 7 instructions; loads
 spin sdk 70c68c 70c7b8 70c7c8   # 32 instructions; loads
 
+# LAN play (MKW_LAN=1), as 1.0.0's lan set (patches-mkw.txt): the title menu's page setup main+0xbdfbe0 (1.0.0's
+# main+0xbf1cf8: same prologue, sub sp #0x2b0, the two stores of [x0+0x368]->+0x68) clears the Wireless/LAN Play choice,
+# now a byte at +0x784 (1.0.0: +0x77c, the page's fields moved by 8); w20 holds 1 there (mov w20, #1 at main+0xbdfc14,
+# callee-saved across the bl at +0xbdfc24), so the store keeps LAN Play chosen.
+set lan MKW_LAN 0
+site lan main bdfc2c 391e127f 391e1274   # strb wzr, [x19, #0x784] -> strb w20: LAN Play chosen; 1.0.0's bf1d44
+
 # zstd on the host's libzstd (runtime/sdk/ov/ov_zstd.c). main+0xe2280 is ZSTD_decompressMultiFrame: the only function
 # with both frame magics (0xfd2fb528, 0x184d2a50); main+0xe1c60, the one-shot wrapper (0xd0 bytes, the call at +0x94 as
 # 1.0.0's main+0x407d34), and main+0xf0a10 call it.
@@ -116,11 +124,13 @@ site zstd main f0c34 97ffc593 94dc00ef   # same
 # ZSTD_decompressContinue (main+0xdf000, reads the DCtx's +0x7068); its only call is from main+0xdec20.
 site zstd main dec5c 94000011 94dc48e1   # bl main+0xdeca0 -> host_stream (patch page + 0xfe0)
 
-# The game's output size: 2560 | 1440 << 32 built in x10 in main+0xb879f0 (the only mov #0xa00 / movk #0x5a0, lsl #32
-# pair of main), as in 1.0.0's GraphicsSystem constructor. x10 is not read between the two.
+# The game's output size: GraphicsSystem's constructor (main+0xdce7d0, the function naming "GraphicsSystem", as 1.0.0's
+# main+0xcf3514) builds it in x10 and stores it at [sp, #0x24], the same slot as 1.0.0; 1.8.0 fixes 3840 | 2160 << 32
+# there (the 3D still renders at the RomFS's 1440 lines). main+0xb879f0's 2560x1440 pair is a table of display modes
+# (720, 1080, 1440, 2160 lines), not the output: patching it left the targets at 2560x1440 (pr450-180, wth180b).
 set output MKW_OUTPUT_PATCH 0
-site output main b87b9c d281400a @page:x10 f947e94a   # mov x10, #0xa00 -> adrp x10, page; ldr x10, [x10, #0xfd0]
-site output main b87ba8 f2c0b40a d503201f            # movk x10, #0x5a0, lsl #32 -> nop
+site output main dce850 d281e00a @page:x10 f947e94a   # mov x10, #0xf00 -> adrp x10, page; ldr x10, [x10, #0xfd0]
+site output main dce854 f2c10e0a d503201f            # movk x10, #0x870, lsl #32 -> nop
 
 # No camera (new in 1.8.0, GameChat's USB camera): main+0xcdebc0 opens the camera service (nn::camera::sdk::
 # CreateCameraContext, then CMIF requests on the handle it returns) and aborts when that fails; this runtime has no
@@ -146,6 +156,12 @@ site aspect main 1805f1c 97ff9e79 947fac15   # same; 1.0.0's 169aeb0
 # 1.0.0's main+0x168a22c is main+0x17f4cb0 here, with DrawInfo in x21 and the rows loaded into q0 and q4 (q2 holds
 # another row by then): host_ui_rows2 (patches.c) in place of host_ui_rows.
 site aspect main 17f5084 ad4092a0 947fefaf   # ldp q0, q4, [x21, #0x10] -> bl host_ui_rows2 (patch page + 0xf40)
+
+# Race FOV for tall Window (host_camera_fov, patches.c): main+0x88f30 is 1.0.0's main+0x45f524 (the only caller of
+# main+0x8a5b0, 1.0.0's 460c10); the same block stores the FOV at [entry+0xa0] and its sinf/cosf/tanf at +0xa4..0xac,
+# with the entry in x20 and the half factor in s14 (version.c fov_entry_x, fov_half_v). Separate set, as in 1.0.0.
+set vertplus MKW_VERTPLUS_PATCH 0
+site vertplus main 894a4 1e2e0808 94dd9ea3   # fmul s8, s0, s14 -> bl host_camera_fov (patch page + 0xf30); 1.0.0's 45fba4
 
 # Shadow map: main+0xb72c0 is 1.0.0's main+0x233358, the RenderBuffer creation (the only function using the string
 # "shadow_map_depth"; width and height at [x0+0x68] and [x0+0x88]); its caller main+0xb6e40 is 1.0.0's main+0x22d45c.

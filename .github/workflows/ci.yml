@@ -19,11 +19,51 @@ env:
   VMA_SHA256: 8487b7995ad3b263eb73bc5b9a77d71aa69b6bef5d58a715c02d2663afd81f1a
 
 jobs:
+  # Which jobs a change needs. `code` is everything but what no build or test reads (docs, translations of texts,
+  # GitHub's own templates and the workflows of other events), so a new folder builds by default. The .po files
+  # are compiled into the runtime, but `checks` generates and compiles their C in a second: a translation alone
+  # runs `checks` and `setup-windows` (tests/test_ui_text.py), not the three builds. A skipped job counts as passed
+  # for a required check and for dependabot-automerge.yml.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.code == 'true' }}
+      po: ${{ steps.filter.outputs.po == 'true' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4.0.3
+        id: filter
+        with:
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+              - '!docs/**'
+              - '!i18n/*.po'
+              - '!LICENSE'
+              - '!Makefile'
+              - '!.github/ISSUE_TEMPLATE/**'
+              - '!.github/labeler.yml'
+              - '!.github/dependabot.yml'
+              - '!.github/workflows/archive.yml'
+              - '!.github/workflows/issues.yml'
+              - '!.github/workflows/labeler.yml'
+              - '!.github/workflows/dependabot-automerge.yml'
+              - '!tools/analisis/**'
+              - '!tools/docs/**'
+              - '!tools/imagen/**'
+            po:
+              - 'i18n/**'
+
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
       - name: Lint
@@ -34,6 +74,10 @@ jobs:
         run: uv run tools/git/cfg_rows.py
       - name: Setup command lines (no game)
         run: uv run pytest tests -q
+      - name: Menu texts compile (the C build.py makes from i18n/*.po)
+        run: |
+          uv run tools/i18n/catalog.py gen "$RUNNER_TEMP/i18n"
+          cc -fsyntax-only -I runtime/gfx/nvn/host "$RUNNER_TEMP"/i18n/*.c
       - name: No game code or files
         run: |
           marker='MKW_RECOMP_'"GENERATED_FROM_GAME_CODE"
@@ -42,27 +86,32 @@ jobs:
 
   # The same tests on Windows: its paths (spaces, drive letters, backslashes) are where the players' setups break (#29)
   setup-windows:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.po == 'true'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
       - name: Setup command lines (no game)
         run: uv run pytest tests -q
 
   linux:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     container: archlinux:latest
     steps:
-      - name: Toolchain and libraries
-        run: |
-          pacman -Syu --noconfirm --needed git ccache clang lld ninja uv python sdl3 opus libvpx zstd xxhash \
-            vulkan-headers vulkan-icd-loader
-      - uses: actions/checkout@v5
+      # Built as release.yml builds it, against the Steam Runtime sysroot: main then keeps both caches (the sysroot
+      # and ccache's objects) that a release tag can read (a tag only sees its own caches and main's). Built against
+      # Arch's libraries instead, the v0.1.12 release rebuilt the sysroot (107 s) and every object (88 s).
+      - name: Tools
+        run: pacman -Syu --noconfirm --needed git ccache clang lld llvm ninja make cmake pkgconf expat binutils uv python
+      - uses: actions/checkout@v7
       - name: ccache in the checkout, kept between runs (build.py compiles through it when installed)
         run: echo "CCACHE_DIR=$PWD/.ccache" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: .ccache
           key: ccache-${{ github.job }}-${{ github.sha }}
@@ -72,21 +121,29 @@ jobs:
           mkdir -p scratchpad/vma
           curl -sSfL -o scratchpad/vma/vk_mem_alloc.h "$VMA_URL"
           echo "$VMA_SHA256  scratchpad/vma/vk_mem_alloc.h" | sha256sum -c -
+      - uses: actions/cache@v6
+        with:
+          path: build/sysroot
+          key: sysroot-${{ hashFiles('tools/build/sysroot.py') }}
+      - name: Steam Runtime sysroot (glibc 2.31)
+        run: uv run tools/build/sysroot.py
       # The self-tests (--probe-*) need the game set up: the runtime claims the game's address space first.
       - name: Runtime and launcher (no game)
-        run: uv run tools/build/build.py --dist --runtime-only
+        run: uv run tools/build/build.py --dist --runtime-only --sysroot build/sysroot
 
   linux-aarch64:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     container: archlinux:latest
     continue-on-error: true   # not a required check: a failure here does not block the other platforms
     steps:
       - name: Tools
         run: pacman -Syu --noconfirm --needed git ccache clang lld llvm ninja make cmake pkgconf expat binutils uv python
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: ccache in the checkout, kept between runs (build.py compiles through it when installed)
         run: echo "CCACHE_DIR=$PWD/.ccache" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: .ccache
           key: ccache-${{ github.job }}-${{ github.sha }}
@@ -96,7 +153,7 @@ jobs:
           mkdir -p scratchpad/vma
           curl -sSfL -o scratchpad/vma/vk_mem_alloc.h "$VMA_URL"
           echo "$VMA_SHA256  scratchpad/vma/vk_mem_alloc.h" | sha256sum -c -
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: build/sysroot-aarch64
           key: sysroot-aarch64-${{ hashFiles('tools/build/sysroot.py') }}
@@ -106,20 +163,22 @@ jobs:
         run: uv run tools/build/build.py --dist --runtime-only --arch aarch64 --sysroot build/sysroot-aarch64
 
   windows:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     container: archlinux:latest
     steps:
       - name: Tools
         run: pacman -Syu --noconfirm --needed git ccache ninja cmake uv python
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: ccache in the checkout, kept between runs (build.py compiles through it when installed)
         run: echo "CCACHE_DIR=$PWD/.ccache" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: .ccache
           key: ccache-${{ github.job }}-${{ github.sha }}
           restore-keys: ccache-${{ github.job }}-
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: build/win
           key: windeps-${{ hashFiles('tools/build/windeps.py') }}
@@ -127,7 +186,7 @@ jobs:
         run: uv run tools/build/windeps.py
       - name: mkw.exe (no game)
         run: uv run tools/build/build.py --target windows --dist --runtime-only
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mkw-windows-runtime
           path: build/dist/windows/mkw.exe

@@ -10,4 +10,5 @@ Boot, modules, kernel, guest memory, settings and diagnostics. Every subfolder w
 | [memory/](memory/README.md) | Guest address space, write tracking, read traps (`MKW_EARLY_READ`) |
 | [base/](base/README.md) | `base/host.h`, settings (`cfg`), `MKW_CTL`, system info, SHA-256, UTF-16 |
 | [hacks/](hacks/README.md) | Shortcuts the console does not have: turbo, skip movies, development helpers |
+| [presence/](presence/README.md) | Discord Rich Presence: the Discord profile shows the game and what the player does (`MKW_DISCORD`) |
 | [diag/](diag/README.md) | Flight recorder, counters, profiling, RenderDoc, `MKW_SEQ_WATCH`, `MKW_IMPORT_CENSUS` |

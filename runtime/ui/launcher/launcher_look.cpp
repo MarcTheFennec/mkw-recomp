@@ -71,4 +71,6 @@ const OptLook launcher_look_rows = {
     /* group */ LOOK_HEADING,
     /* warn */ LOOK_WARN,
     /* radius */ 3,
+    /* quiet */ true,
+    /* changed */ LOOK_ACCENT_HOT,
 };

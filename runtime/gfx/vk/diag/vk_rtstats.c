@@ -54,6 +54,8 @@ typedef struct Job {
 static PlatMutex q_lock = PLAT_MUTEX_INIT;
 static PlatCond q_cv = PLAT_COND_INIT, idle_cv = PLAT_COND_INIT;
 static Job *q_head, *q_tail;
+static PlatThread *workers[WORKERS];
+static int stopping;
 static uint64_t seen[SEEN_CAP];
 static int nseen, seen_full;
 
@@ -130,7 +132,8 @@ static void worker(void *arg) {
     VmaAllocator vma = dvma();
     for (;;) {
         plat_mutex_lock(&q_lock);
-        while (!q_head) plat_cond_wait(&q_cv, &q_lock);
+        while (!q_head && !stopping) plat_cond_wait(&q_cv, &q_lock);
+        if (!q_head) { plat_mutex_unlock(&q_lock); return; }
         Job *j = q_head;
         if (!(q_head = j->next)) q_tail = NULL;
         plat_mutex_unlock(&q_lock);
@@ -260,7 +263,7 @@ void vk_rtstats_every(uint32_t n) {
     every = n ? n : 1;
     if (vk_rtstats_on) return;
     for (int i = 0; i < WORKERS; i++)
-        if (plat_thread_spawn(worker, NULL, "rtstats", 0)) vk_rtstats_on = 1;
+        if ((workers[i] = plat_thread_new(worker, NULL, "rtstats"))) vk_rtstats_on = 1;
     if (!vk_rtstats_on) rt_log("rtstats: cannot start its threads, off");
 }
 
@@ -280,3 +283,16 @@ void vk_rtstats_flush(void) {
 }
 
 uint64_t vk_rtstats_hits(int rule) { return __atomic_load_n(&hits[rule], __ATOMIC_RELAXED); }
+
+// After the completion thread has delivered every copy: finish the queued scans before freeing their allocator.
+void vk_rtstats_shutdown(void) {
+    plat_mutex_lock(&q_lock);
+    stopping = 1;
+    plat_cond_broadcast(&q_cv);
+    plat_mutex_unlock(&q_lock);
+    for (int i = 0; i < WORKERS; i++) {
+        if (workers[i]) plat_thread_join(workers[i]);
+        workers[i] = NULL;
+    }
+    vk_rtstats_on = stopping = 0;
+}

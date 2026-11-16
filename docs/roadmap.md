@@ -20,10 +20,9 @@ recorded, so recording is on the critical path: every millisecond saved there is
 ~21 ms, where the GPU (busy ~20 ms) takes over. Spreading the same CPU work over more threads does not help by
 itself; recording with less CPU does. Already done: recordings reused across frames (−4.3 ms), recording overlapped
 with the game (−2.4 ms), submits on their own thread (−1.2 to −1.6 ms), the shadow copies off the replay thread
-(−0.8 ms), the replay thread on its own core (−1.1 ms). Next:
+(−0.8 ms), the replay thread on its own core (−1.1 ms), dynamic state recorded only when it changes (idea from
+totk-pc-recomp, MIT; −10.6 % recorder instructions on Steam Deck; no measurable frame-time change). Next:
 
-- **Dynamic state recorded only when it changes** (idea and code from totk-pc-recomp, MIT): there it took the replay
-  from 7.77 to 6.67 ms.
 - **Less work per draw**: descriptor sets kept across frames by their contents (`MKW_DRAW_CACHE`).
 - **Recording in parallel**: chunks of a submit on several threads; today they fight over the texture lock, which has
   to be split first.
@@ -70,8 +69,9 @@ screen by screen against the console.
   runtime's addresses) is redone for it; the game cannot be shared, so this needs someone who owns that version to run
   the tools on their own dump and contribute the result.
 - 1.8.0 (11/11/2026): recognised by the setup (`recomp/versions.py`), its own patch table
-  (`recomp/patches-mkw-180.txt`: spin waits, zstd, output size) and runtime row (`runtime/core/boot/version.c`: frame
-  update and game clock, zstd, NVN2 proc table and `nvnDeviceGetInteger` answers, boot checkpoint, the new `subsdk1`
-  module's constructors). Still to find in its executable: the `aspect`, `shadow` and `seed` sets and the menu focus
-  probe; to check in a run: the 30 NVN2 procs new in its sdk (weak stubs but three scheduling hints), its 43 new
-  shader stages and the button icon sheet's hash.
+  (`recomp/patches-mkw-180.txt`: spin waits, zstd, output size and every set of 1.0.0 — aspect, vertplus (the tall
+  Window's race FOV), shadow, seed and LAN play) and runtime row (`runtime/core/boot/version.c`: frame update and game
+  clock, zstd, NVN2 proc table and `nvnDeviceGetInteger` answers, boot checkpoint, the new `subsdk1` module's
+  constructors). Still to find in its
+  executable: the menu focus probe; to check in a run: the 30 NVN2 procs new in its sdk (weak stubs but three
+  scheduling hints), its 43 new shader stages and the button icon sheet's hash.

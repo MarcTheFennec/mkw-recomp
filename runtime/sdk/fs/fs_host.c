@@ -26,6 +26,7 @@
 #include "fs.h"
 #include "hacks.h"
 #include "host.h"
+#include "presence.h"
 #include "platform/platform.h"
 #include "romfs_path.h"
 
@@ -900,6 +901,7 @@ static void unlock_on_open(const char *host_path, int kind) {
 }
 
 static uint32_t open_file(uint64_t *out, const char *path, int mode) {
+    presence_file_opened(path);   // core/presence: what the Discord profile says the player does
     if (romfs_owns(path)) {
         skip_file_opened(path);   // core/hacks/skip.c: MKW_SKIP_MOVIES
         return romfs_open(out, path, mode);

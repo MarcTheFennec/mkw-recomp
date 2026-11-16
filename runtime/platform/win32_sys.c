@@ -552,6 +552,46 @@ int plat_stderr_path(char *out, size_t cap) {
     return WideCharToMultiByte(CP_UTF8, 0, p, -1, out, (int)cap, NULL, NULL) != 0;
 }
 
+// ---- local IPC: a named pipe opened for synchronous reads and writes, read only as far as PeekNamedPipe says is
+// there, so a read never blocks (a blocking ReadFile on a synchronous handle would also hold back its writes).
+
+struct PlatIpc { HANDLE h; };
+
+PlatIpc *plat_ipc_open(const char *name) {
+    wchar_t w[256] = L"\\\\.\\pipe\\";
+    size_t n = wcslen(w);
+    if (!MultiByteToWideChar(CP_UTF8, 0, name, -1, w + n, (int)(256 - n))) return NULL;
+    HANDLE h = CreateFileW(w, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return NULL;   // no such pipe, or every instance busy (ERROR_PIPE_BUSY)
+    PlatIpc *c = malloc(sizeof *c);
+    if (!c) return CloseHandle(h), NULL;
+    c->h = h;
+    return c;
+}
+
+int plat_ipc_send(PlatIpc *c, const void *data, size_t n) {
+    for (const char *p = data; n;) {
+        DWORD done = 0, part = n > 0x10000 ? 0x10000 : (DWORD)n;
+        if (!WriteFile(c->h, p, part, &done, NULL) || !done) return 0;
+        p += done, n -= done;
+    }
+    return 1;
+}
+
+long plat_ipc_recv(PlatIpc *c, void *buf, size_t cap) {
+    DWORD avail = 0, got = 0;
+    if (!PeekNamedPipe(c->h, NULL, 0, NULL, &avail, NULL)) return -1;
+    if (!avail || !cap) return 0;
+    if (!ReadFile(c->h, buf, avail < cap ? avail : (DWORD)cap, &got, NULL)) return -1;
+    return (long)got;
+}
+
+void plat_ipc_close(PlatIpc *c) {
+    if (!c) return;
+    CloseHandle(c->h);
+    free(c);
+}
+
 // ---- desktop
 
 int plat_clipboard_set(const char *utf8) {

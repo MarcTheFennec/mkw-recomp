@@ -194,12 +194,20 @@ static int test_case(VkCtx *c, uint32_t bw, uint32_t bh, int srgb, uint32_t nx, 
 // through a blit to RGBA8. A constant colour fits mode 6 within 1 per channel, so a layout or bit-packing mistake shows
 // as a large error. Level 0 cropped as in test_case, level 1 half of it.
 // kind 2: BC1 instead (opaque ASTC, MKW_ASTC_BC1): RGB only, within the 5.6.5 endpoint rounding.
+// kind 3: BC7 of white and black, each transparent and opaque: mode 6 shares one p-bit between the four channels of an
+// endpoint, and a transparent texel's alpha must stay exactly 0 (issue #397: transparent white came back with alpha
+// 1/255, a faint box around UI images); the rest within 2, as above (opaque black may read alpha 254).
+static const uint16_t extremes[4][4] = {{0xFFFF, 0xFFFF, 0xFFFF, 0}, {0, 0, 0, 0xFFFF}, {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF},
+                                        {0, 0, 0, 0}};
 static int bc7_case(VkCtx *c, uint32_t bw, uint32_t bh, uint32_t nx, uint32_t ny, int kind) {   // nx x ny blocks at level 0
-    const char *name = kind == 2 ? "BC1" : "BC7";
+    const char *name = kind == 2 ? "BC1" : kind == 3 ? "BC7 alpha 0" : "BC7";
     uint32_t w0 = nx * bw - 1 - (bw > 5), h0 = ny * bh - 2, w1 = w0 >> 1, h1 = h0 >> 1;
     size_t n0 = (size_t)((w0 + bw - 1) / bw) * ((h0 + bh - 1) / bh), n1 = (size_t)((w1 + bw - 1) / bw) * ((h1 + bh - 1) / bh);
     uint8_t *blk = malloc((n0 + n1) * 16);
-    for (size_t k = 0; k < n0 + n1; k++) void_block(blk + 16 * k, 1);
+    for (size_t k = 0; k < n0 + n1; k++) {
+        void_block(blk + 16 * k, 1);
+        if (kind == 3) memcpy(blk + 16 * k + 8, extremes[k % 4], 8);   // the void extent's RGBA, UNORM16
+    }
     size_t t0 = (size_t)w0 * h0, t1 = (size_t)w1 * h1;
     uint8_t *want = malloc((t0 + t1) * 4);
     astc_decode_ldr(blk, w0, h0, bw, bh, 0, want);
@@ -226,7 +234,8 @@ static int bc7_case(VkCtx *c, uint32_t bw, uint32_t bh, uint32_t nx, uint32_t ny
     VkAstcRegion ar[2] = {{.src = 0, .w = w0, .h = h0, .slices = 1, .level = 0},
                           {.src = n0 * 16, .w = w1, .h = h1, .slices = 1, .level = 1}};
     barrier(cb, ALL_RW, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-    if (!vk_astc_record(cb, sb, (n0 + n1) * 16, ar, 2, bw, bh, 0, bc.img, VK_IMAGE_ASPECT_COLOR_BIT, kind, VK_NULL_HANDLE))
+    if (!vk_astc_record(cb, sb, (n0 + n1) * 16, ar, 2, bw, bh, 0, bc.img, VK_IMAGE_ASPECT_COLOR_BIT, kind == 3 ? 1 : kind,
+                        VK_NULL_HANDLE))
         printf("probe-astc: FAIL %s %ux%u: not recorded\n", name, bw, bh), bad = 1;
     barrier(cb, ALL_RW, ALL_RW);
     for (uint32_t lv = 0; lv < 2; lv++) {
@@ -248,6 +257,7 @@ static int bc7_case(VkCtx *c, uint32_t bw, uint32_t bh, uint32_t nx, uint32_t ny
     for (size_t i = 0; i < (t0 + t1) * 4 && !bad; i++) {
         if (kind == 2 && i % 4 == 3) continue;   // BC1 RGB: alpha reads 1
         int d = abs((int)imap[i] - (int)want[i]);
+        if (kind == 3 && i % 4 == 3 && !want[i] && d) d = 255;   // alpha 0: exact, or it fails
         if (d > worst) worst = d, at = i / 4;
     }
     if (!bad && worst > (kind == 2 ? 5 : 2)) {
@@ -310,7 +320,8 @@ int probe_astc(void) {
     if (!bad && vk_astc_bc7()) {   // MKW_ASTC_BC7=1
         // the 4-aligned footprints; the last one is 4800x2400, over vk_astc.c's 32 MiB scratch chunk at level 0
         bad = bc7_case(c, 4, 4, 37, 23, 1) || bc7_case(c, 8, 8, 37, 23, 1) || bc7_case(c, 12, 12, 37, 23, 1) ||
-              bc7_case(c, 8, 8, 600, 300, 1) || bc7_case(c, 8, 8, 37, 23, 2) || bc7_case(c, 8, 8, 600, 300, 2);
+              bc7_case(c, 8, 8, 600, 300, 1) || bc7_case(c, 8, 8, 37, 23, 2) || bc7_case(c, 8, 8, 600, 300, 2) ||
+              bc7_case(c, 8, 8, 37, 23, 3);
     } else if (!bad) {
         printf("probe-astc: BC7 re-encoding off (MKW_ASTC_BC7=1 tests it)\n");
     }

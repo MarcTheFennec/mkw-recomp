@@ -34,6 +34,7 @@ static const OptLook kMenuLook = {
     IM_COL32(255, 255, 255, 38), IM_COL32(255, 255, 255, 18), IM_COL32(255, 255, 255, 14),        // border, _off, cell_off
     IM_COL32(237, 194, 84, 255), IM_COL32(242, 168, 102, 255),                                    // group, warn
     9,                                                                                             // radius
+    false, 0,                                                                                      // quiet, changed
 };
 static const OptLook *g_look = &kMenuLook;
 
@@ -46,6 +47,10 @@ static bool g_held;                      // the last row's left / right has been
 static float g_bottom;                   // opt_reserve_bottom: kept free under the panes
 static bool g_disable_next;              // opt_disable_next: the next row is greyed out with g_disable_note
 static UiTextId g_disable_note;
+static bool g_indent;                    // opt_indent
+// The mouse moved after the last navigation key: the row under it is the one highlighted and described, else the
+// cursor's. One source, so the pane never describes a row other than the one drawn selected.
+static bool g_mouse;
 
 // The description pane: this frame's hovered and selected rows, the page's first row, and the last one shown.
 struct Desc { char text[512]; };
@@ -59,7 +64,7 @@ static void desc_set(Desc &d, UiTextId desc, const char *key, const CfgMeta *m, 
         snprintf(d.text + n, sizeof d.text - n, "\n\n%s", disabled);
     else if (cfg_from_env(key))
         snprintf(d.text + n, sizeof d.text - n, "\n\n%s %s", menu_text(UI_MENU_SET_BY_ENV), key);
-    else if (m && !m->live)
+    else if (m && !m->live && !g_look->quiet)
         snprintf(d.text + n, sizeof d.text - n, "\n\n%s", menu_text(UI_MENU_AFTER_RESTART));
 }
 
@@ -74,12 +79,30 @@ void opt_disable_next(UiTextId note) {
     g_disable_note = note;
 }
 
+void opt_indent(bool on) { g_indent = on; }
+
 void opt_begin(const char *id, float scale) {
     g_scale = scale;
     g_take_first = g_focus_req;
     g_focus_req = false;
     if (g_take_first) ImGui::NavMoveRequestCancel();   // this frame's move goes to the first row instead
     g_hover.text[0] = g_focus.text[0] = g_first.text[0] = 0;
+    // A tab or page left behind with the mouse keeps g_mouse set, so on this one g_hover stays empty and opt_end would
+    // keep the pane describing the rows of the one before; the pane starts again with this page's own rows.
+    static char g_page[64] = "";
+    if (strcmp(g_page, id)) {
+        g_shown.text[0] = 0;
+        snprintf(g_page, sizeof g_page, "%s", id);
+    }
+    g_indent = false;
+    static const ImGuiKey kNav[] = {ImGuiKey_UpArrow,         ImGuiKey_DownArrow,        ImGuiKey_LeftArrow,
+                                    ImGuiKey_RightArrow,      ImGuiKey_Tab,              ImGuiKey_GamepadDpadUp,
+                                    ImGuiKey_GamepadDpadDown, ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadDpadRight};
+    const ImGuiIO &io = ImGui::GetIO();
+    if (io.MouseDelta.x != 0 || io.MouseDelta.y != 0) g_mouse = true;
+    for (ImGuiKey k : kNav)
+        if (ImGui::IsKeyPressed(k, false)) g_mouse = false;
+    if (g_take_first) g_mouse = false;
     ImVec2 avail = ImGui::GetContentRegionAvail();
     avail.y -= g_bottom;
     ImGui::PushID(id);
@@ -95,9 +118,9 @@ void opt_end(void) {
     ImGui::PopStyleVar();
     if (g_test_scroll >= 0) ImGui::SetScrollY(ImGui::GetScrollMaxY() * g_test_scroll);
     ImGui::EndChild();
-    // the hovered row (mouse) wins, else the selected one (controller), else the last shown, else the first row
-    if (g_hover.text[0]) g_shown = g_hover;
-    else if (g_focus.text[0]) g_shown = g_focus;
+    // the row the player used last (g_mouse), else the last shown, else the first row
+    const Desc &used = g_mouse ? g_hover : g_focus;
+    if (used.text[0]) g_shown = used;
     else if (!g_shown.text[0]) g_shown = g_first;
     ImGui::SameLine(0, 0);
     ImVec2 p = ImGui::GetCursorScreenPos(), avail = ImGui::GetContentRegionAvail();
@@ -132,6 +155,7 @@ static int row(const char *key, UiTextId label, UiTextId desc, const RowView &v)
     g_disable_next = false;
     bool off = disabled || cfg_from_env(key) != 0;
     ImGui::PushID(key);
+    if (g_indent) ImGui::Indent(24 * g_scale);
     ImVec2 p = ImGui::GetCursorScreenPos();
     // h whole pixels: ImGui truncates cursor positions, which rounds a fractional height the other way above the window's
     // top (negative y), so the page grew a pixel per row scrolled out and a row scrolled to the bottom was cut off
@@ -148,7 +172,10 @@ static int row(const char *key, UiTextId label, UiTextId desc, const RowView &v)
         g_take_first = false;
         if (to_key) g_focus_key[0] = 0;
     }
-    bool hov = ImGui::IsItemHovered(), foc = ImGui::IsItemFocused() && ImGui::GetCurrentContext()->NavCursorVisible;
+    // foc: the cursor is on it (left / right step it); sel: drawn and described as selected, the mouse's row when the
+    // mouse was used last, else the cursor's
+    bool foc = ImGui::IsItemFocused() && ImGui::GetCurrentContext()->NavCursorVisible;
+    bool hov = g_mouse && ImGui::IsItemHovered(), sel = hov || (foc && !g_mouse);
     int step = clicked && !off ? 2 : 0;
     g_held = false;
     if (foc && !off) {
@@ -163,24 +190,27 @@ static int row(const char *key, UiTextId label, UiTextId desc, const RowView &v)
             ImGui::SetKeyOwner(k, ImGui::GetItemID());
         }
     }
-    if (foc) desc_set(g_focus, desc, key, m, disabled);
+    if (foc && !g_mouse) desc_set(g_focus, desc, key, m, disabled);
     if (hov) desc_set(g_hover, desc, key, m, disabled);
     if (!g_first.text[0]) desc_set(g_first, desc, key, m, disabled);
 
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImFont *font = ImGui::GetFont();
     float r = g_look->radius * g_scale, pad = 16 * g_scale, small = fs * 0.72f;
-    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), hov || foc ? g_look->fill_hot : g_look->fill, r);
+    if (g_indent)   // the line the indented rows hang from
+        dl->AddLine(ImVec2(p.x - 12 * g_scale, p.y - 5 * g_scale), ImVec2(p.x - 12 * g_scale, p.y + h), g_look->border,
+                    1.0f);
+    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), sel ? g_look->fill_hot : g_look->fill, r);
     dl->AddRect(p, ImVec2(p.x + w, p.y + h),
-                hov || foc ? (off ? g_look->select_off : g_look->select) : off ? g_look->border_off : g_look->border, r, 0,
-                hov || foc ? 2.0f : 1.0f);
+                sel ? (off ? g_look->select_off : g_look->select) : off ? g_look->border_off : g_look->border, r, 0,
+                sel ? 2.0f : 1.0f);
     float ty = p.y + fs * 0.25f, ny = p.y + fs * 1.3f;   // the label line and the note line under it
     float right = p.x + w - pad;                         // the value's right edge
     float value_left = right;
     if (v.arrows && v.value[0]) {   // < value >, drawn (the font has no arrow glyphs); a click on one steps
         float aw = fs * 0.42f, gap = fs * 0.55f, cy = ty + fs * 0.52f;
         float rx = right - aw, lx = rx - gap - ImGui::CalcTextSize(v.value).x - gap - aw;
-        ImU32 ac = off ? g_look->off : hov || foc ? g_look->select : g_look->arrow;
+        ImU32 ac = off ? g_look->off : sel ? g_look->select : g_look->arrow;
         dl->AddTriangleFilled(ImVec2(lx, cy), ImVec2(lx + aw, cy - aw * 0.75f), ImVec2(lx + aw, cy + aw * 0.75f), ac);
         dl->AddTriangleFilled(ImVec2(rx + aw, cy), ImVec2(rx, cy - aw * 0.75f), ImVec2(rx, cy + aw * 0.75f), ac);
         if (clicked && !off) {
@@ -197,7 +227,7 @@ static int row(const char *key, UiTextId label, UiTextId desc, const RowView &v)
                     v.value);
         if (!v.arrows) value_left = vx;
     }
-    if (v.note || v.is_default) {   // under the value, right-aligned with it
+    if (v.note || (v.is_default && !g_look->quiet)) {   // under the value, right-aligned with it
         const char *t = v.note ? v.note : menu_text(UI_MENU_DEFAULT_MARK);
         float tw = font->CalcTextSizeA(small, FLT_MAX, 0, t).x;
         dl->AddText(font, small, ImVec2(right - tw, ny), v.note ? g_look->note : g_look->dim, t);
@@ -206,11 +236,16 @@ static int row(const char *key, UiTextId label, UiTextId desc, const RowView &v)
     ImVec4 clip(p.x, p.y, value_left - fs * 0.6f, p.y + h);
     dl->AddText(font, fs, ImVec2(p.x + pad, ty), off ? g_look->off : g_look->label, menu_text(label), NULL, 0,
                 &clip);
-    const char *note = disabled        ? disabled
-                     : off             ? menu_text(UI_MENU_SET_BY_ENV)
-                     : m && !m->live ? menu_text(UI_MENU_AFTER_RESTART)
-                                     : NULL;
+    const char *note = disabled                          ? disabled
+                     : off                               ? menu_text(UI_MENU_SET_BY_ENV)
+                     : m && !m->live && !g_look->quiet ? menu_text(UI_MENU_AFTER_RESTART)
+                                                         : NULL;
     if (note) dl->AddText(font, small, ImVec2(p.x + pad, ny), off ? g_look->note_off : g_look->dim, note);
+    if (g_look->quiet && !off && v.value[0] && !v.is_default) {   // changed from the default: a dot after the label
+        float dx = p.x + pad + ImGui::CalcTextSize(menu_text(label)).x + fs * 0.5f, dr = fs * 0.14f;
+        if (dx + dr < value_left - fs * 0.6f) dl->AddCircleFilled(ImVec2(dx, ty + fs * 0.55f), dr, g_look->changed, 12);
+    }
+    if (g_indent) ImGui::Unindent(24 * g_scale);
     ImGui::PopID();
     return off ? 0 : step;
 }
@@ -409,15 +444,16 @@ int opt_bind_row(const char *key, const char *label, UiTextId desc, const char *
             g_take_first = false;
             if (to_key) g_focus_key[0] = 0;
         }
-        bool hov = ImGui::IsItemHovered(), foc = ImGui::IsItemFocused() && ImGui::GetCurrentContext()->NavCursorVisible;
-        row_foc |= foc;
+        bool foc = ImGui::IsItemFocused() && ImGui::GetCurrentContext()->NavCursorVisible;
+        bool hov = g_mouse && ImGui::IsItemHovered(), sel = hov || (foc && !g_mouse);   // as row()
+        row_foc |= foc && !g_mouse;
         row_hov |= hov;
         if (clicked) result = c;
         if (foc && (ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false) ||
                     ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false)))
             result = 10 + c;
-        dl->AddRectFilled(a, b, hov || foc ? g_look->fill_hot : g_look->fill, r);
-        dl->AddRect(a, b, hov || foc ? g_look->select : g_look->border, r, 0, hov || foc ? 2.0f : 1.0f);
+        dl->AddRectFilled(a, b, sel ? g_look->fill_hot : g_look->fill, r);
+        dl->AddRect(a, b, sel ? g_look->select : g_look->border, r, 0, sel ? 2.0f : 1.0f);
         if (!(g_icon[c].pad && pad_icon_draw(dl, ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f), h * 0.8f, g_icon[c].pad,
                                              g_icon[c].kind)))
             fit_text(dl, a.x + pad, b.x - pad, a.y, h, g_look->value, t, true);

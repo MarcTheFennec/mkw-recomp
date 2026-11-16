@@ -403,6 +403,7 @@ static int blocked(volatile int32_t *flag, uint64_t buttons) {
 }
 
 void input_poll(uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
+    lat_input_read();   // MKW_LATENCY: the first read of each frame
     poll_merged(buttons, lx, ly, rx, ry);
     int text = blocked(&g_block, *buttons), menu = blocked(&g_menu, *buttons);
     if (!text && !menu) return;

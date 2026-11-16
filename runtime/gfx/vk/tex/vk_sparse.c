@@ -180,7 +180,8 @@ static SlotBlock *new_block(VkCtx *c, uint32_t type_bits, VkDeviceSize slot_size
     SlotBlock *b = calloc(1, sizeof *b);
     if (!b) rt_fatal("vk: out of memory (sparse block)");
     VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = slot_size * BLOCK_SLOTS,
-                             .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT, .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+                             .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                             .sharingMode = VK_SHARING_MODE_EXCLUSIVE};   // fills and capture readbacks
     if (vkCreateBuffer(c->device, &bi, NULL, &b->buf) != VK_SUCCESS) { free(b); return NULL; }
     VkMemoryRequirements rb;
     vkGetBufferMemoryRequirements(c->device, b->buf, &rb);
@@ -541,14 +542,37 @@ static void tail_bind_now(VkCtx *c, SparseImg *s) {
     s->tail_pending = 0;
 }
 
-int vk_sparse_create(const VkImageCreateInfo *ci0, const nvn_texdesc *d, uint64_t addr, uint64_t size, VkImage *out) {
+// imageGranularity is "in texels or compressed texel blocks": NVIDIA gives BC7 256x256 (texels), Intel's Windows driver
+// 64x64 (blocks), both the standard 64 KiB block. Binds go in texels, so 64x64 taken as texels bound each block 16 times
+// and spent 16 times the slots: 1 048 576 tiles left non-resident on an Arc B580 against 32 768 on an RTX 3050, roads
+// and trees black or missing (#476, #475, #355). A BC format whose granularity as texels is not 64 KiB but is as
+// blocks is converted.
+void vk_sparse_granularity_texels(VkFormat f, uint32_t *gw, uint32_t *gh) {
+    if (f < VK_FORMAT_BC1_RGB_UNORM_BLOCK || f > VK_FORMAT_BC7_SRGB_BLOCK) return;
+    int half = f <= VK_FORMAT_BC1_RGBA_SRGB_BLOCK || f == VK_FORMAT_BC4_UNORM_BLOCK || f == VK_FORMAT_BC4_SNORM_BLOCK;
+    uint64_t bpb = half ? 8 : 16;
+    if ((uint64_t)(*gw / 4) * (*gh / 4) * bpb == 65536 || (uint64_t)*gw * *gh * bpb != 65536) return;
+    static int logged;
+    if (!logged++)
+        rt_log("vk: sparse: the driver gives compressed formats' block size in 4x4 blocks (%ux%u for VkFormat %d): "
+               "taken as %ux%u texels", *gw, *gh, (int)f, *gw * 4, *gh * 4);
+    *gw *= 4, *gh *= 4;
+}
+
+int vk_sparse_create(const VkImageCreateInfo *ci0, const nvn_texdesc *d, uint64_t addr, uint64_t size, VkImage *out,
+                     VkSparseTail *tail) {
     VkCtx *c = vk_ctx();
     static volatile int32_t nwarn;
     *out = VK_NULL_HANDLE;
+    *tail = (VkSparseTail){0};
     if (!on() || !(d->flags & NVN_TEXTURE_FLAGS_SPARSE) || !nvn_gpu_only(addr) || ci0->imageType != VK_IMAGE_TYPE_2D ||
         ci0->samples != VK_SAMPLE_COUNT_1_BIT || !(ci0->usage & VK_IMAGE_USAGE_SAMPLED_BIT))
         return 0;
     VkImageCreateInfo ci = *ci0;
+    // Only cube targets take cube views (vk_exec_view.c). Unneeded cube compatibility on the terrain's 2D arrays
+    // makes non-base mips sample zeros on RX 570 / Windows 26.5.2 even though transfer readbacks are correct.
+    if (d->target != NVN_TEXTURE_TARGET_CUBEMAP && d->target != NVN_TEXTURE_TARGET_CUBEMAP_ARRAY)
+        ci.flags &= ~(VkImageCreateFlags)VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
     ci.flags |= VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT | VK_IMAGE_CREATE_SPARSE_ALIASED_BIT;
     ci.usage &= ~(VkImageUsageFlags)VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
     uint32_t n = 0;
@@ -568,6 +592,7 @@ int vk_sparse_create(const VkImageCreateInfo *ci0, const nvn_texdesc *d, uint64_
     s->w = ci.extent.width, s->h = ci.extent.height, s->layers = ci.arrayLayers;
     s->ntw = (uint32_t)lay[1], s->nth = (uint32_t)lay[2];
     s->gw = fp[0].imageGranularity.width, s->gh = fp[0].imageGranularity.height;
+    vk_sparse_granularity_texels(ci.format, &s->gw, &s->gh);
     if (!s->gw || !s->gh || s->ntw % s->gw || s->nth % s->gh || lay[0] > 16) {
         if (plat_inc32(&nwarn) <= 8)
             rt_log("vk: sparse: NVN tile %ux%u is not whole Vulkan blocks of %ux%u (VkFormat %d)", s->ntw, s->nth, s->gw,
@@ -642,6 +667,13 @@ int vk_sparse_create(const VkImageCreateInfo *ci0, const nvn_texdesc *d, uint64_
                s->stride, s->gw, s->gh, (unsigned long long)s->slot_size, nr ? sr.imageMipTailFirstLod : 0,
                (unsigned long long)(s->va_size >> 20), (long long)ns);
     *out = s->img;
+    if (s->tail_alloc) {
+        uint32_t w = s->w >> s->nlev, h = s->h >> s->nlev;
+        w = w ? w : 1, h = h ? h : 1;
+        // A whole sparse block per covered tile bounds the tight linear bytes of one layer, including compressed formats.
+        *tail = (VkSparseTail){s->nlev, s->aspect,
+                              (VkDeviceSize)((w + s->gw - 1) / s->gw) * ((h + s->gh - 1) / s->gh) * s->slot_size};
+    }
     return 1;
 }
 
@@ -665,9 +697,9 @@ uint64_t vk_sparse_destroy(VkImage img) {
         free(s->bound);
         free(s->dirty);
         free(s->dl);
+        sparse_va -= s->va_size;
         free(s);
         n_images--;
-        sparse_va -= s->va_size;
     }
     plat_mutex_unlock(&sp_lock);
     return bind_fence;
@@ -871,5 +903,39 @@ void vk_sparse_load(const void *key, uint32_t klen, const void *p, uint64_t n) {
     memcpy(copy, p, n);
     plat_mutex_lock(&sp_lock);
     free(nvn_hm_put(&cap_pending, key, copy));
+    plat_mutex_unlock(&sp_lock);
+}
+
+// The replay and completion threads have stopped, textures are gone and the device is idle. Slot blocks are kept for
+// reuse during play, but their buffers/allocations and the bind-order semaphores must go before their owners.
+void vk_sparse_shutdown(void) {
+    VkCtx *c = vk_ctx();
+    if (!c || !c->device) return;
+    plat_mutex_lock(&sp_lock);
+    for (uint32_t i = 0; i < slots.cap; i++) free(slots.vals ? slots.vals[i] : NULL);
+    free(slots.keys), free(slots.vals);
+    slots = (nvn_hmap){.klen = sizeof(SlotKey)};
+    for (uint32_t i = 0; i < cap_pending.cap; i++) free(cap_pending.vals ? cap_pending.vals[i] : NULL);
+    free(cap_pending.keys), free(cap_pending.vals);
+    cap_pending = (nvn_hmap){.klen = sizeof(SlotKey)};
+    while (blocks) {
+        SlotBlock *b = blocks;
+        blocks = b->next;
+        if (b->buf) vkDestroyBuffer(c->device, b->buf, NULL);
+        if (b->alloc) vmaFreeMemory(c->vma, b->alloc);
+        free(b);
+    }
+    for (int i = 0; i < ndying_tails; i++) vmaFreeMemory(c->vma, dying_tails[i]);
+    free(dying_tails), free(dying);
+    dying_tails = NULL, dying = NULL;
+    ndying_tails = cdying_tails = ndying = cdying = ndirty = ntail_pending = 0;
+    if (order_tl) vkDestroySemaphore(c->device, order_tl, NULL);
+    if (bind_sem) vkDestroySemaphore(c->device, bind_sem, NULL);
+    order_tl = bind_sem = VK_NULL_HANDLE;
+    order_val = bind_val = sparse_va = 0;
+    binary_pending = 0;
+    n_slots = n_failed = n_binds = n_images = n_blocks = n_over = n_written = n_tail_writes = n_host_blocks = 0;
+    memset(lanes, 0, sizeof lanes);
+    lane_at = 0;
     plat_mutex_unlock(&sp_lock);
 }

@@ -391,6 +391,12 @@ static void maybe_split(VkExec *ex) {
     if (reopen) vk_exec_pass_begin(ex);
 }
 
+// A draw or dispatch recorded on the replay thread outside walk (MKW_REPLAY_PAR's serial head, vk_exec_par.c): the
+// same split check, so the head's first part goes to the GPU as early as the serial replay's.
+void vk_exec_drew(VkExec *ex) {
+    if (++split_draws >= split_n) maybe_split(ex);
+}
+
 // MKW_TRACE=draw: the replay's time per op (TSC ticks, the call's own handler only), logged with the parts line of
 // MKW_TRACE=perf: where the recording's CPU goes (rt-h2: ~730 ms per s of wall clock in a race). Not part of perf: its
 // clock reads were a third of bind_resources' own samples (rt-x2, perf record).
@@ -484,10 +490,7 @@ int vk_exec_state_op(VkExec *ex, uint32_t op, const void *a) {
 // the other had set). A queue first seen in the submission starts from the state the replay is at, as every
 // submission does. The switch ends the pass and puts a full barrier between the two queues' work: the wait it stands
 // for orders the other queue's writes before what follows.
-#define QS_MAX 4
-static struct { uint64_t id; VkExec st; } qs[QS_MAX];
-static int nqs;
-static uint64_t qs_cur;
+static VkExecQueues QS;
 
 // MKW_QORDER_LOG=N (diagnosis): the first N queue switches, each with what the queue before it ran since its turn
 // began (draws, dispatches, ops), to tell which stages the queues pass each other.
@@ -497,30 +500,27 @@ static void queue_switch_log(uint64_t id) {
     if (left < 0) left = cfg_get("MKW_QORDER_LOG") ? atoi(cfg_get("MKW_QORDER_LOG")) : 0;
     if (!left) return;
     left--;
-    if (!qs_cur) o0 = 0;   // (op positions count from the submission's start)
+    if (!QS.cur) o0 = 0;   // (op positions count from the submission's start)
     rt_log("vk: queue %#llx after %#llx: %llu draws, %llu dispatches, %llu ops in its turn (fence %llu)",
-           (unsigned long long)id, (unsigned long long)qs_cur,
+           (unsigned long long)id, (unsigned long long)QS.cur,
            (unsigned long long)(vk_exec_frame.draws_seen - d0), (unsigned long long)(vk_exec_frame.dispatches - c0),
            (unsigned long long)(x_pos - o0), (unsigned long long)vk_exec_recording_fence());
     d0 = vk_exec_frame.draws_seen, c0 = vk_exec_frame.dispatches, o0 = x_pos;
 }
 
-static void queue_switch(VkExec *ex, uint64_t id) {
-    if (id == qs_cur) return;
-    queue_switch_log(id);
-    vk_exec_pass_end(ex);
-    vk_exec_barrier(ex);
+int vk_exec_queue_swap(VkExecQueues *t, VkExec *ex, uint64_t id) {
+    if (id == t->cur) return 0;
     int from = -1, to = -1;
-    for (int i = 0; i < nqs; i++) {
-        if (qs[i].id == qs_cur) from = i;
-        if (qs[i].id == id) to = i;
+    for (int i = 0; i < t->n; i++) {
+        if (t->q[i].id == t->cur) from = i;
+        if (t->q[i].id == id) to = i;
     }
-    if (qs_cur && from < 0 && nqs < QS_MAX) from = nqs++, qs[from].id = qs_cur;
-    if (from >= 0) qs[from].st = *ex;
-    qs_cur = id;
-    if (to < 0) return;
+    if (t->cur && from < 0 && t->n < VK_EXEC_QUEUES) from = t->n++, t->q[from].id = t->cur;
+    if (from >= 0) t->q[from].st = *ex;
+    t->cur = id;
+    if (to < 0) return 1;   // a queue first seen goes on from ex
     VkExec keep = *ex;
-    *ex = qs[to].st;
+    *ex = t->q[to].st;
     // What belongs to the command buffer being recorded, not to the queue: kept.
     ex->cb = keep.cb, ex->fence = keep.fence, ex->recorded = keep.recorded, ex->in_pass = 0;
     ex->views = keep.views, ex->nviews = keep.nviews, ex->cap_views = keep.cap_views;
@@ -530,6 +530,15 @@ static void queue_switch(VkExec *ex, uint64_t id) {
     ex->nfbl = keep.nfbl, ex->fbl_mask = keep.fbl_mask, ex->fb_dirty = keep.fb_dirty, ex->fb_fs = NULL;
     ex->tex_serial = keep.tex_serial + 1, ex->pass_serial = keep.pass_serial + 1;
     ex->dirty = VK_EXEC_DIRTY_ALL, ex->rt_resolved = 0;
+    return 2;
+}
+
+static void queue_switch(VkExec *ex, uint64_t id) {
+    if (id == QS.cur) return;
+    queue_switch_log(id);
+    vk_exec_pass_end(ex);
+    vk_exec_barrier(ex);
+    if (vk_exec_queue_swap(&QS, ex, id) < 2) return;
     dc_drop("a queue switch");
     vk_exec_draw_new_cb();
 }
@@ -567,7 +576,7 @@ int vk_exec_op(VkExec *ex, const op_hdr *h) {
         if (h->op == OP_DRAW_IDX_IND) vk_exec_frame.draws_seen++, drew = 1;
         if (h->op == OP_DISPATCH || h->op == OP_DISPATCH_IND) vk_exec_frame.dispatches++, drew = 1;
     case OP_BIND_PROGRAM: case OP_BIND_STATE: case OP_BIND_VATTR: case OP_BIND_VSTREAM: case OP_BIND_VBUF:
-    case OP_BIND_UBO: case OP_BIND_SSBO: case OP_BIND_TEX: case OP_BIND_SAMP: case OP_BIND_IMG:
+    case OP_BIND_UBO: case OP_BIND_SSBO: case OP_BIND_TEX: case OP_BIND_SAMP: case OP_BIND_IMG: case OP_PUSH_CONST:
         vk_exec_op_draw(ex, h->op, a);
         break;
     case OP_QUEUE: queue_switch(ex, ((const p_queue *)a)->id); break;
@@ -703,7 +712,7 @@ int vk_exec_record(VkCommandBuffer cb, const uint64_t *handles, int n, uint64_t 
     part_t0 = kern_now_ns();
     x_cur = x_here_ex = ex;
     x_pos = 0;
-    nqs = 0, qs_cur = 0;   // queue states live within one submission (queue_switch)
+    QS.n = 0, QS.cur = 0;   // queue states live within one submission (queue_switch)
     uint64_t b0 = op_timing > 0 ? plat_cycles() : 0;
     if (n && rec_diff_on > 0) rec_diff_begin();
     if (n) ru_submission(ex);
@@ -713,8 +722,9 @@ int vk_exec_record(VkCommandBuffer cb, const uint64_t *handles, int n, uint64_t 
     if (op_timing > 0) op_tsc[OPX_BEGIN] += plat_cycles() - b0, op_cnt[OPX_BEGIN]++;
     for (int i = 0; i < n; i++)
         if (!handles[i]) rt_fatal("vk: command handle %d of a submission is null", i);
-    if (n && vk_exec_par(ex, handles, n, op_timing > 0 || pt_on > 0)) part_start = ex->recorded;   // chunks submitted
-    else
+    int par = n ? vk_exec_par(ex, handles, n, op_timing > 0 || pt_on > 0) : 0;
+    if (par == 1) part_start = ex->recorded;   // chunks submitted
+    else if (!par)
         for (int i = 0; i < n; i++) walk(ex, nvn_op_first(handles[i]), 0);
     b0 = op_timing > 0 ? plat_cycles() : 0;
     vk_exec_pass_end(ex);

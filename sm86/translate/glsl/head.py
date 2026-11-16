@@ -2,7 +2,7 @@
 resource bindings and their reflection) and the task/mesh wrappers around the translated body."""
 
 from glsl.common import (HMMA_FN, LDSM_FN, LOP3_FN, MOVM_FN, NMINMAX_FN, PRMT_FN, SHFL_FN, SMEM_PORTABLE_WORDS,
-                         SMEM_WRAP_SENTINEL)  # fmt: skip
+                         SMEM_WRAP_SENTINEL, WARP_FN)  # fmt: skip
 from glsl.thread import ThreadOps
 
 
@@ -45,6 +45,7 @@ def declarations(b, stage: str, shape: tuple[int, int, int, int] | None) -> list
         ]
         if b.uses_arith:
             head.append("#extension GL_KHR_shader_subgroup_arithmetic : require")  # fmt: skip
+        head.append(WARP_FN)
     if stage == "cs":
         # Workgroup and shared memory size from the program's control section (compute_shape). They were
         # specialization constants that no back end set: every dispatch ran 1x1x1 groups until 31/10/2026.

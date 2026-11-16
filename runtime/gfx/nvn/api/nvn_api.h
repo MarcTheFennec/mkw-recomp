@@ -62,6 +62,10 @@ uint64_t gfx_replayed_submits(void);                       // newest submit numb
 #define NVN_HANDLE_SAMP(h) ((int)(((h) >> 20) & 0xfff))
 extern GfxStats gfx_counters;                              // behind gfx_stats(); add with __atomic_fetch_add. frames:
                                                            // the back end's present; nvn_calls/nvn_distinct: NVN_API
+// nvn_dstk.c (ctl drawstacks): draws counted by guest call stack and depth target for the next N frames
+void nvn_dstk_request(int frames);
+void nvn_dstk_rt(const void *depth_mem);
+void nvn_dstk_draw(const Cpu *c);
 
 // ---- nvn_api_obj.c: textures, samplers, programs, windows
 #define NVN_TEX_MAGIC MAGIC('T', 'E', 'X', 0)              // tex_t.magic of an initialized texture

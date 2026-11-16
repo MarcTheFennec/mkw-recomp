@@ -144,7 +144,13 @@ class AluOps:
         return self.plop3(i, "U")
 
     def iabs(self, i: Insn) -> str:
-        return self.dst(i, f"uint(abs(int({self.src_u(i, 'b')})))")
+        # x times its sign (1 or -1), not abs(): NVIDIA's compiler (610.74 and 621.24, RTX 2070 SUPER) faults the GPU
+        # ("instruction pointer invalid", device lost) on an IABS of a small select (0/-1, -1/0/1) followed by IADD and XOR,
+        # and it also reads x < 0 ? -x : x, max(x, -x) and (x ^ m) - m as that IABS; the product it leaves alone.
+        # Issue #22: the title-screen particles (vs c5d3832d / 1c7a765b) took the GPU down on their first draw.
+        tmp = f"ab{i.pc}"
+        d = self.dst(i, f"({tmp} * (uint(int({tmp}) >> 31) | 1u))")
+        return f"{{ uint {tmp} = {self.src_u(i, 'b')}; {d} }}" if d else ""
 
     def ubrev(self, i: Insn) -> str:
         return self.dst(i, f"bitfieldReverse({self.src_u(i, 'b')})")

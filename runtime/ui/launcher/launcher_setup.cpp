@@ -129,12 +129,15 @@ void setup_start(const char *exe_dir, const char *game_dir, const char *source, 
         return;
     }
     // -I: no user site packages or PYTHON* variables, nothing from the working directory
-    // without a source, prepare.py takes the last setup's (and its RomFS mode) and the arguments end at the version
+    // without a source, prepare.py takes the last setup's; link_romfs < 0 leaves --romfs out too, so the RomFS mode
+    // comes from that same record (0.1.11: the automatic set up after an update asked for "copy" and would have
+    // copied 23 GB over a player who chose "link")
     const char *args[] = {python, "-I", script, "--game", game_dir, "--runtime", exe_dir, "--port", rt_port_version, "--source", source,
                           "--romfs", link_romfs ? "link" : "copy", nullptr};
     if (!source) args[9] = nullptr;
+    if (link_romfs < 0) args[11] = nullptr;
     rt_log("setup: %s %s --game %s --runtime %s --source %s --romfs %s", python, script, game_dir, exe_dir, source ? source : "(last)",
-           link_romfs ? "link" : "copy");
+           link_romfs < 0 ? "(last)" : link_romfs ? "link" : "copy");
     g_proc = SDL_CreateProcess(args, true);
     if (!g_proc) {
         set_finished(-1, "", SDL_GetError());

@@ -13,6 +13,7 @@ described the state of five days before. Checks, on the files git tracks (index)
      the README still at 11 511).
   6. A note, not a refusal, when a translation of the README (docs/i18n/README.<lang>.md) was made from an older
      README.md than the one committed (tools/docs/i18n_readme.py --check; Adrià 13/11/2026: it warns).
+  7. The table of docs/performance.md is sorted by version, then by internal resolution (perf_table.py --check).
 
 Usage: uv run tools/docs/check.py          (tools/git/pre-commit and the CI run it; exit 1 lists every problem)
 """
@@ -127,6 +128,11 @@ def check_progress(staged: set[str]) -> list[str]:
     return []
 
 
+def check_perf_table() -> list[str]:
+    r = subprocess.run([sys.executable, str(ROOT / "tools/docs/perf_table.py"), "--check"], capture_output=True, text=True)
+    return [r.stderr.strip().removeprefix("docs: ")] if r.returncode else []
+
+
 def note_translations() -> None:
     sys.path.insert(0, str(ROOT / "tools/docs"))
     import i18n_readme
@@ -139,7 +145,7 @@ def note_translations() -> None:
 def main() -> int:
     files = git("ls-files", "-z")
     staged = set(git("diff", "--cached", "--name-only", "--diff-filter=AM"))
-    errors = check_folders(tree(files)) + check_links(files) + check_progress(staged) + check_readme()
+    errors = check_folders(tree(files)) + check_links(files) + check_progress(staged) + check_readme() + check_perf_table()
     for e in errors:
         print(f"docs: {e}", file=sys.stderr)
     note_translations()

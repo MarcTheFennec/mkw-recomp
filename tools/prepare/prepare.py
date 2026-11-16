@@ -16,7 +16,8 @@ Steps, into --game (by default the folder of mkw / mkw.exe):
   shaders   the SM86 spec built here from NVIDIA's nvdisasm (sm86/spec/spec.py, into sm86/; never shipped), then
             tools/shaders/extract.py and translate.py into spirv/
   warm      the game run once for a minute: the driver's pipeline cache and the pipeline keys for the first start
-  cleanup   setup-work removed but its obj/: the next update compiles only the chunks whose C changed (gamecode.py)
+  cleanup   setup-work removed but its obj/ and zig-cache/: the next update compiles only the chunks whose C changed
+            (gamecode.py), and zig does not build its libc again
 
 The copy is loose exefs/ and romfs/ folders, or a .nup package (the Switch 2 dump format, nup.py): --source names the
 package file itself. From a package, exefs/ is extracted, romfs/ extracted (copy) or the package itself
@@ -70,15 +71,17 @@ import build  # (GEN_FLAGS, module_glue, game_id: the same game code as build.py
 import game_texts  # (build_all: the game's texts in ca, gl, eu)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gamecode import compile_game
+from gamecode import DamagedSource, compile_game
 from gamesource import check, is_nx, loose_romfs, unpack
 from gamecopy import clear_dir, copy_tree, remove_stale
 from nup import Nup
 from machine import (
+    ZIG_CACHE,
     Failed,
     default_cc,
     default_glslc,
     emit,
+    mem_available_gb,
     mem_gb,
     own_children,
     run,
@@ -171,6 +174,13 @@ def regenerate_if_cleaned(state: dict, keys: dict[str, str], work: Path) -> None
         state["done"].pop("generate", None)
 
 
+def redo_exefs_if_missing(state: dict, game: Path) -> None:
+    """Undoes the exefs step when its copy is gone: the step is skipped by its key (source and version), and a folder
+    emptied or moved since made generate stop on "module main not in the layout" (#419), which names no cause."""
+    if "exefs" in state["done"] and not (game / "exefs/main").is_file():
+        state["done"].pop("exefs")
+
+
 GENERATOR = [
     *sorted((ROOT / "recomp").glob("*.py")),
     *sorted((ROOT / "recomp").glob("patches-mkw*.txt")),
@@ -181,14 +191,15 @@ COMPILER = [*GENERATOR, ROOT / "tools/build/build.py", Path(__file__).with_name(
 def warm(game: Path, work: Path, runtime: Path | None = None) -> None:
     """The game run once to its title, so the first real start finds pipeline-cache.bin and pipeline-keys.bin. Its
     saves go to a scratch profile: the player's first start stays a first start. The window opens without taking focus
-    and without sound; the run is ended after WARM_SECONDS."""
+    and without sound; the run is ended after WARM_SECONDS. Its log is logs/warm.log: in mkw.log it pushed the player's
+    last run out of the file reports attach and the start screen reads (#437, 16/11/2026)."""
     exe = (runtime or game) / ("mkw.exe" if os.name == "nt" else "mkw")
-    env = dict(os.environ, MKW_LAUNCHED="1", MKW_ASSUME_FOCUS="1", MKW_AUDIO="none",
+    env = dict(os.environ, MKW_LAUNCHED="1", MKW_ASSUME_FOCUS="1", MKW_AUDIO="none", MKW_LOG_NAME="warm",
                MKW_GAME_DIR=str(game), MKW_PROFILE_DIR=str(work / "warm-profile"))  # fmt: skip
     p = subprocess.Popen([str(exe)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for t in range(WARM_SECONDS):
         if p.poll() is not None:
-            raise Failed(f"the game stopped while warming up (exit {p.returncode}); its log is in {game / 'logs'}")
+            raise Failed(f"the game stopped while warming up (exit {p.returncode}); its log is {game / 'logs/warm.log'}")
         emit("progress", t, WARM_SECONDS)
         time.sleep(1)
     p.terminate()
@@ -270,17 +281,26 @@ def main() -> None:
 
     # Within 60 % of the RAM, by what one job was measured to take (13/11/2026, 12 at once): a compile 0.5 GB (peaks
     # 266-409 MB, build.py --job-mem-gb), a generate worker 0.7 GB (gen.py: 5 065 MB for 12, one up to 608 MB). 1 GB for
-    # both kept a 12-thread PC with 13 GB at 8 compiles and an 8 GB one at 4
-    def fit(gb: float) -> int:
-        return args.jobs or max(1, min(os.cpu_count() or 1, int(mem_gb() * 0.6 / gb)))
+    # both kept a 12-thread PC with 13 GB at 8 compiles and an 8 GB one at 4.
+    # Windows, 15/11/2026 (24 threads, 31 GB): 24 generate workers held 26.6 GB of private memory, 1.1 GB each (cause
+    # not measured), and took the free memory from 8.9 GB to 0.13 GB; 24 compiles held 7.6 GB, 0.32 GB each. So a
+    # Windows worker counts 1.2 GB (the 1.1 measured plus a margin, as 0.7 is for 0.42 on Linux). The budget is also
+    # what is free when the setup starts (the player's browser and launcher stay open), as shader_jobs does on every
+    # system; on Linux MemAvailable counts the reclaimable cache, and it lowers the jobs only when less than 60 % of the
+    # RAM is available (not measured on Linux).
+    free = mem_available_gb()
+    budget = min(mem_gb() * 0.6, free)
 
-    jobs, gen_jobs = fit(0.5), fit(0.7)
+    def fit(gb: float) -> int:
+        return args.jobs or max(1, min(os.cpu_count() or 1, int(budget / gb)))
+
+    jobs, gen_jobs = fit(0.5), fit(1.2 if os.name == "nt" else 0.7)
     # setup.log only (stderr): what the machine gave the setup, and below each step's time, so two setups (Linux and
     # Windows, or a player's and ours) compare step by step (Adrià 13/11/2026: "los logs de preparación deberían
     # guardar tiempos"; 0.1.10's Windows setup took twice the Linux one and nothing said where)
     print(
-        f"machine: {os.cpu_count()} threads, {mem_gb():.1f} GB, {jobs} compile and {gen_jobs} generate jobs, "
-        f"{sys.platform}",
+        f"machine: {os.cpu_count()} threads, {mem_gb():.1f} GB, {free:.1f} GB free, {jobs} compile and {gen_jobs} "
+        f"generate jobs, {sys.platform}",
         file=sys.stderr,
     )
     t_all, step, t_step = time.monotonic(), "check", time.monotonic()
@@ -314,6 +334,7 @@ def main() -> None:
             "warm": f"{build.game_id()} {romfs_src}",
         })  # fmt: skip
         regenerate_if_cleaned(state, keys, work)
+        redo_exefs_if_missing(state, game)
         for step in STEPS[1:]:
             # The start screen sets up again when its version differs (launcher.cpp): an update by hand (a new
             # AppImage or zip over the old) kept the old steps (#50: 0.1.8 played with 0.1.7's shaders). Kept once the
@@ -357,7 +378,14 @@ def main() -> None:
             elif step == "generate":
                 generate(game / "exefs", work, gen_jobs, version, image)
             elif step == "compile":
-                compile_game(game, game / "exefs", work, cc, args.target, jobs)
+                try:
+                    compile_game(game, game / "exefs", work, cc, args.target, jobs)
+                except DamagedSource as e:  # once: a second damaged write is the disk or the memory, not chance
+                    print(f"{e}: generating again", file=sys.stderr)
+                    emit("step", "generate")
+                    generate(game / "exefs", work, gen_jobs, version, image)
+                    emit("step", "compile")
+                    compile_game(game, game / "exefs", work, cc, args.target, jobs)
             elif step == "shaders":
                 # extract.py reads a .nup itself; a .nx's shader archives are unpacked first
                 src_romfs = loose_romfs(runtime, romfs, work, "Shader", *SHADER_DIRS) if is_nx(romfs) else romfs
@@ -366,7 +394,7 @@ def main() -> None:
                 warm(game, work, runtime)
             elif step == "cleanup":
                 for p in work.glob("*"):
-                    if p.is_dir() and p.name != "obj":
+                    if p.is_dir() and p.name not in ("obj", ZIG_CACHE):
                         shutil.rmtree(p, ignore_errors=True)
                 # the languages the game does not ship (ca, gl, eu), from this version's translations (the step runs
                 # at every setup, so an update brings its new texts); about a second

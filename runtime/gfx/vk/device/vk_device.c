@@ -246,6 +246,8 @@ typedef struct {
     VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR lr;
     VkPhysicalDeviceMapMemoryPlacedFeaturesEXT placed;
     VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR pexe;
+    VkPhysicalDevicePresentIdFeaturesKHR pid;
+    VkPhysicalDevicePresentWaitFeaturesKHR pwait;
 } FeatureChain;
 
 static int create_device(void) {
@@ -345,12 +347,22 @@ static int create_device(void) {
         gpl_link = tail;
         CHAIN(gpl, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT);
     }
+    // MKW_LATENCY only (vk_latency.c): when each picture reached the screen
+    int want_pw = vk_lat_on() && has_ext(ep, ne, VK_KHR_PRESENT_ID_EXTENSION_NAME) &&
+                  has_ext(ep, ne, VK_KHR_PRESENT_WAIT_EXTENSION_NAME);
+    if (want_pw) {
+        ext[n_ext++] = VK_KHR_PRESENT_ID_EXTENSION_NAME;
+        ext[n_ext++] = VK_KHR_PRESENT_WAIT_EXTENSION_NAME;
+        CHAIN(pid, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR);
+        CHAIN(pwait, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR);
+    }
     free(ep);
 
     // The driver fills the chain with what it supports; the same chain then enables all of it (robustBufferAccess
     // stays on: guest shaders index constant buffers freely and out-of-range reads must stay harmless).
     vkGetPhysicalDeviceFeatures2(g_vk.phys, &c->f2);
     vk_caps_features(&c->f2.features);
+    int has_pw = want_pw && c->pid.presentId && c->pwait.presentWait;
     if (gpl_link) {
         VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT gp = {
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_PROPERTIES_EXT};
@@ -410,6 +422,7 @@ static int create_device(void) {
     VkResult r = vkCreateDevice(g_vk.phys, &di, NULL, &g_vk.device);
     free(c);
     if (r != VK_SUCCESS) { rt_log("vk: vkCreateDevice failed (%d)", (int)r); return 0; }
+    vk_lat_device(g_vk.device, has_pw);
     vkGetDeviceQueue(g_vk.device, g_vk.gfx_family, 0, &g_vk.gfx_queue);
     if (g_vk.xfer_family != g_vk.gfx_family) vkGetDeviceQueue(g_vk.device, g_vk.xfer_family, 0, &g_vk.xfer_queue);
     else { g_vk.xfer_queue = g_vk.gfx_queue; g_vk.xfer_shared = 1; }
@@ -517,6 +530,8 @@ static void destroy_all(void) {
     if (g_vk.device) vk_astc_release(), vk_crumbs_release();
     if (g_vk.timeline) vkDestroySemaphore(g_vk.device, g_vk.timeline, NULL);
     vk_headroom_stop();
+    vk_tex_pool_stop();
+    vk_sparse_shutdown();
     if (g_vk.vma) vmaDestroyAllocator(g_vk.vma);
     if (g_vk.device) vkDestroyDevice(g_vk.device, NULL);
     if (g_vk.messenger) {

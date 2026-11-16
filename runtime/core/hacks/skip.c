@@ -15,7 +15,10 @@
 #define PRESS_TICKS 4
 #define MAX_TICKS 600    // 10 s of game time: the longest opening is ~7 s (WaitIntroMovie, tck1)
 
+#define OPENING_MAX_NS 15000000000ull   // an opening whose decoder never closes stops counting as one after this
+
 static _Atomic uint64_t since;   // the tick the movie opened at + 1; 0 none
+static _Atomic uint64_t opening_at;   // kern_now_ns when an opening's file opened, 0 none (whether skipped or not)
 
 static int is_opening(const char *path) {
     const char *name = strrchr(path, '/');
@@ -24,13 +27,24 @@ static int is_opening(const char *path) {
     return strstr(path, "Movie/") && n > 7 && (!strcmp(name + n - 7, "Op.webm") || !strcmp(name + n - 7, "OP.webm"));
 }
 
+// game.c runs a cup opening at interval 1 from its file's open: one opened at 2 or 4 (MKW_FPS 30, 20, 15; under
+// MKW_SKIP_MOVIES or the player's own A) was not skipped in 7 of 9 runs, one opened at 1 always was (13 of 13; dn2,
+// 15/11/2026). ov_movie_playing() sees it only once its first pictures come out, too late.
+int skip_opening_playing(void) {
+    uint64_t t = atomic_load_explicit(&opening_at, memory_order_relaxed);
+    return t && kern_now_ns() - t < OPENING_MAX_NS;
+}
+
 void skip_file_opened(const char *path) {
-    if (!is_opening(path) || !cfg_bool("MKW_SKIP_MOVIES")) return;   // the path first: every guest file open comes here
+    if (!is_opening(path)) return;   // the path first: every guest file open comes here
+    atomic_store_explicit(&opening_at, kern_now_ns(), memory_order_relaxed);
+    if (!cfg_bool("MKW_SKIP_MOVIES")) return;
     atomic_store_explicit(&since, frame_step_ticks() + 1, memory_order_relaxed);
     rt_log("skip: %s opened: pressing A until it ends (MKW_SKIP_MOVIES)", path);
 }
 
 void skip_movie_closed(void) {
+    atomic_store_explicit(&opening_at, 0, memory_order_relaxed);
     uint64_t t = atomic_exchange_explicit(&since, 0, memory_order_relaxed);
     if (t) rt_log("skip: the movie ended after %llu ticks", (unsigned long long)(frame_step_ticks() + 1 - t));
 }

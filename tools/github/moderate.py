@@ -19,6 +19,8 @@ Rules (the bot never comments where a maintainer already did):
 - a closed issue is reopened when its author, or anyone attaching a log, says it still happens
 - a published release closes the `fixed-next-release` issues with a link to it
 - a log from a run with mods on: a note asking for the same run without them (mods are their authors'); label `mods`
+- a known error only in an older log than the newest run's (mkw.N.log): a note pointing to its issue, left open
+- only the setup's warm-up log attached to a report not about the setup: a note asking for the run's own log
 
 Usage: uv run tools/github/moderate.py issue N | comment N COMMENT_ID | sweep | release TAG | backlog [--apply]
 """
@@ -52,7 +54,7 @@ TEXT = {
     "game": "Only Mario Kart World 1.0.0 or 1.8.0 dumped from your own console is supported; issues about obtaining the game, "
     "its files or keys are closed.",
     "logs": "Thanks for the report. To find the cause we need the log: please attach `logs/mkw.log` from the game "
-    "folder (or `logs/setup.log` if the setup failed) by dragging it into a comment; the wiki says "
+    "folder (or `logs/setup.log` and `logs/warm.log` if the setup failed) by dragging it into a comment; the wiki says "
     "[where it is]({repo_url}/wiki/Installation#where-things-live). Without it this issue is closed "
     f"in {LOG_DAYS} days.",
     "dup": "Thanks for the report. This looks like #{issue}: {what}. Please follow and add to that issue instead; this "
@@ -60,6 +62,9 @@ TEXT = {
     "dup_old": "Thanks for the report. This looks like #{issue}: {what}, fixed in {fixed}. You are on {ver}: please "
     "update to the [latest release]({repo_url}/releases/latest). This one is closed as its duplicate; if it still "
     "happens there, reply here with its `logs/mkw.log` and it is reopened.",
+    "dup_next": "Thanks for the report. This looks like #{issue}: {what}. It is fixed in `main` and comes in {fixed}, "
+    "which is not out yet: please follow #{issue}, it is closed with a link when {fixed} is published. This one is "
+    "closed as its duplicate; if it still happens on {fixed}, reply here with its `logs/mkw.log` and it is reopened.",
     "retry": "This was reported on {ver}, and {latest} is out with many fixes since. Please try the "
     "[latest release]({repo_url}/releases/latest) and reply here: whether it still happens, with its `logs/mkw.log` "
     f"attached. Without a reply this issue is closed in {RETRY_DAYS} days.",
@@ -75,23 +80,29 @@ TEXT = {
     "the game does not have: please try again with them off (Mods page, Installed) and attach that `logs/mkw.log`. "
     "If it only happens with a mod, please report it to the mod's author.",
     "release": "Fixed in [{tag}]({url}). If it still happens there, open a new issue with `logs/mkw.log` attached.",
+    "dup_older": "Note: an older log here (`{name}`) has the error of #{issue}: {what}. If that is the problem you "
+    "report, please follow #{issue}; the newest log doesn't show it, so this issue stays open.",
+    "warm": "Note: the attached log is from the setup's warm-up (a short start of the game while it sets up; its saves "
+    "are in `setup-work/warm-profile`), not from the run you describe. Each start moves the log before it to "
+    "`mkw.1.log`, `mkw.2.log`…: please attach the one from the run with the problem (its first lines name the "
+    "version). From 0.1.13 the warm-up writes its own `logs/warm.log`.",
 }
 
 
 LOG_FILE = re.compile(r"https://github\.com/user-attachments/files/\d+/[^\s)\]\"']+\.(?:log|txt)")
 
 
-def attached_logs(text: str) -> str:
-    """The text of the .log/.txt files attached in text (the first 4, up to 4 MiB each). A known error is usually only
-    in the log: #96 (11/11/2026) had "instruction pointer invalid" in mkw.1.log and nothing in its body."""
+def attached_logs(text: str) -> list[tuple[str, str]]:
+    """(file name, text) of the .log/.txt files attached in text (the first 4, up to 4 MiB each). A known error is
+    usually only in the log: #96 (11/11/2026) had "instruction pointer invalid" in mkw.1.log and nothing in its body."""
     out = []
     for url in list(dict.fromkeys(LOG_FILE.findall(text)))[:4]:
         try:
             with urllib.request.urlopen(url, timeout=30) as r:
-                out.append(r.read(4 << 20).decode("utf-8", "replace"))
+                out.append((url.rsplit("/", 1)[-1], r.read(4 << 20).decode("utf-8", "replace")))
         except OSError as e:
             print(f"  {url}: {e}")
-    return "\n".join(out)
+    return out
 
 
 class GitHub:
@@ -185,7 +196,10 @@ class Moderator:
             self.gh.unlabel(n, *sorted(stale))
         if human:
             return
-        logs = attached_logs(reported)
+        files = attached_logs(reported)
+        logs = "\n".join(t for _, t in files)
+        setup = (classify.form_field(body, "Where") or "").startswith("Start screen or setup")
+        newest, older = classify.split_logs(files, setup)
         if (mod := classify.modified_build(logs)) and MARK.format("modified") not in said:
             self.gh.comment(n, "modified", TEXT["modified"].format(ver=mod, repo_url=self.repo_url))
         if on := classify.mods_enabled(logs):
@@ -193,9 +207,16 @@ class Moderator:
                 self.gh.label(n, "mods")  # made on GitHub by hand (#274), not in NEW_LABELS: those are swept as stale
             if MARK.format("mods") not in said:
                 self.gh.comment(n, "mods", TEXT["mods"].format(mods=on))
-        sig = classify.known_error(n, f"{title}\n{body}\n{logs}", ver, self.sigs)
+        sig = classify.known_error(n, "\n".join([title, body, *(t for _, t in newest)]), ver, self.sigs)
+        for name, text in [] if sig else older:
+            if (s := classify.known_error(n, text, ver, self.sigs)) and MARK.format("dup_older") not in said:
+                self.gh.comment(n, "dup_older", TEXT["dup_older"].format(name=name, issue=s.issue, what=s.what))
+                break
+        if files and not newest and not sig and MARK.format("warm") not in said:
+            self.gh.comment(n, "warm", TEXT["warm"])
         if sig and MARK.format("dup") not in said:
-            key = "dup_old" if sig.fixed else "dup"
+            # #483 (16/11/2026): "fixed in v0.1.13, please update" while v0.1.12 was the newest release
+            key = ("dup_old" if sig.fixed in self.releases else "dup_next") if sig.fixed else "dup"
             text = TEXT[key].format(issue=sig.issue, what=sig.what, fixed=sig.fixed, ver=ver, repo_url=self.repo_url)
             if sig.wiki:
                 text += TEXT["wiki"].format(repo_url=self.repo_url, wiki=sig.wiki)

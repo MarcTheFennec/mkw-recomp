@@ -148,6 +148,33 @@ def known_error(number: int, text: str, ver: str | None, sigs: list[Signature]) 
     return None
 
 
+# A log's place in the rotation from its attachment's name: mkw.log 0, mkw.1.log 1... (a renamed copy, "x.mkw.log", 0)
+ROTATED = re.compile(r"mkw\.(\d+)\.log$", re.I)
+# The setup's warm-up run (tools/prepare/prepare.py warm): its saves go to setup-work/warm-profile. Before 0.1.13 it
+# wrote mkw.log, pushing the player's run to mkw.1.log (#437, 16/11/2026: the attached mkw.log was the warm-up's)
+WARM_UP = re.compile(r"setup-work[\\/]+warm-profile", re.I)
+
+
+def is_warm_up(log: str) -> bool:
+    return bool(WARM_UP.search(log))
+
+
+def log_age(name: str) -> int:
+    return int(m.group(1)) if (m := ROTATED.search(name)) else 0
+
+
+def split_logs(files: list[tuple[str, str]], setup: bool) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """The attached logs (name, text) as (newest, older): newest is the most recent game run among them, the one a
+    report describes; a warm-up counts as older unless the report is about the setup. A known error only in an older
+    log may be another run's (#425, 15/11/2026: an ultrawide report closed as #22 for its mkw.N.log)."""
+    runs = [f for f in files if setup or not is_warm_up(f[1])]
+    if not runs:
+        return [], files
+    age = min(log_age(f[0]) for f in runs)
+    newest = [f for f in runs if log_age(f[0]) == age]
+    return newest, [f for f in files if f not in newest]
+
+
 STILL = re.compile(
     r"\b(still|again|persists?|same (thing|error|issue|problem|crash|freeze)|not (fixed|working)|doesn'?t work)\b", re.I
 )

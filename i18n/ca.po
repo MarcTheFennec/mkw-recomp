@@ -16,9 +16,10 @@ msgctxt "UI_MENU_TAB_SCREEN"
 msgid "Screen"
 msgstr "Pantalla"
 
-msgctxt "UI_MENU_TAB_GAME"
-msgid "Game"
-msgstr "Joc"
+#. The settings tab with the game's and the menu's language, LAN play and the update check.
+msgctxt "UI_MENU_TAB_GENERAL"
+msgid "General"
+msgstr "General"
 
 msgctxt "UI_MENU_TAB_SOUND"
 msgid "Sound"
@@ -27,10 +28,6 @@ msgstr "So"
 msgctxt "UI_MENU_TAB_CONTROLS"
 msgid "Controls"
 msgstr "Controls"
-
-msgctxt "UI_MENU_TAB_MENU"
-msgid "Menu"
-msgstr "Menú"
 
 msgctxt "UI_MENU_TAB_ADVANCED"
 msgid "Advanced"
@@ -142,9 +139,33 @@ msgctxt "UI_MENU_QUICK_RACE_TT"
 msgid "Time trial"
 msgstr "Contrarellotge"
 
+msgctxt "UI_MENU_QUICK_RACE_GP"
+msgid "Grand Prix"
+msgstr ""
+
 msgctxt "UI_MENU_QUICK_RACE_FREE"
 msgid "Free roam"
 msgstr "Mode lliure"
+
+msgctxt "UI_MENU_CLASSIC_GP"
+msgid "Classic Grand Prix"
+msgstr ""
+
+msgctxt "UI_MENU_CLASSIC_GP_DESC"
+msgid ""
+"Grand Prix races take place on each course instead of the road to it. Knockout Tour is unchanged. "
+"Changes take several seconds and affect races started afterward."
+msgstr ""
+
+msgctxt "UI_MENU_CLASSIC_VS"
+msgid "Classic VS races"
+msgstr ""
+
+msgctxt "UI_MENU_CLASSIC_VS_DESC"
+msgid ""
+"VS races after the first take place on the next course instead of the road to it, whatever the "
+"course rule. Changes take several seconds and affect races started afterward."
+msgstr ""
 
 msgctxt "UI_MENU_ANISO"
 msgid "Texture filtering"
@@ -416,12 +437,15 @@ msgstr "Fotogrames per segon"
 
 msgctxt "UI_MENU_FPS_DESC"
 msgid ""
-"Frames per second the game aims for. Automatic is the console's: 60, or 30 when a frame takes too "
-"long. If your computer cannot hold 60, choose 30 so the race runs at its real speed."
+"Frames per second the game aims for. Automatic lowers it from 60 to 30, 20 or 15 when frames take "
+"too long, so the race always runs at its real speed. At 20 or 15, Frame generation can show the "
+"frames in between. 20 and 15 apply only in races: menus, movies and loading screens go at 30 at "
+"most, as on the console."
 msgstr ""
-"Els fotogrames per segon als quals va el joc. «Automàtic» és el de la consola: 60, o 30 quan un "
-"fotograma triga massa. Si el teu ordinador no arriba a 60, tria 30 i la cursa anirà a la seva "
-"velocitat real."
+"Els fotogrames per segon als quals va el joc. «Automàtic» baixa de 60 a 30, 20 o 15 quan un "
+"fotograma triga massa, perquè la cursa vagi sempre a la seva velocitat real. A 20 o 15, la "
+"generació de fotogrames pot mostrar els fotogrames intermedis. 20 i 15 només s'apliquen a les "
+"curses: els menús, els vídeos i les pantalles de càrrega van com a màxim a 30, com a la consola."
 
 msgctxt "UI_MENU_FPS_AUTO"
 msgid "Automatic"
@@ -433,13 +457,47 @@ msgstr "Generació de fotogrames"
 
 msgctxt "UI_MENU_FRAMEGEN_DESC"
 msgid ""
-"Shows frames made between the game's own: 2x turns 30 fps into 60. Automatic makes as many as "
-"your monitor's refresh rate has room for. Adds up to one frame of delay, and fast motion can "
+"Shows frames made between the game's own: 2x turns 30 fps into 60. Automatic makes only as many "
+"as divide your monitor's refresh rate evenly. Adds up to one frame of delay, and fast motion can "
 "smear. Not on the console."
 msgstr ""
-"Mostra fotogrames fets entre els del joc: 2x converteix 30 fps en 60. «Automàtic» en fa tants com "
-"càpiguen a la freqüència del teu monitor. Afegeix fins a un fotograma de retard i el moviment "
-"ràpid pot embrutar-se. La consola no ho fa."
+"Mostra fotogrames fets entre els del joc: 2x converteix 30 fps en 60. «Automàtic» només fa els "
+"que divideixen la freqüència del monitor en parts iguals. Afegeix fins a un fotograma de retard i "
+"el moviment ràpid es pot emborronar. La consola no ho fa."
+
+msgctxt "UI_MENU_FRAMEGEN_UNEVEN"
+msgid ""
+"At the game's frame rate now, this factor does not divide your screen's refresh rate evenly: "
+"motion judders. Automatic avoids it."
+msgstr ""
+"Amb els fps del joc ara, aquest factor no divideix la freqüència de la pantalla en parts iguals: "
+"el moviment fa salts. «Automàtic» ho evita."
+
+msgctxt "UI_MENU_VRR"
+msgid "Variable refresh screen"
+msgstr "Pantalla amb refresc variable"
+
+msgctxt "UI_MENU_VRR_DESC"
+msgid ""
+"Turn on if your screen has FreeSync or G-Sync and it is enabled. Off, Automatic frame generation "
+"only makes the frames that divide the refresh rate evenly, so motion does not judder."
+msgstr ""
+"Activa-ho si la pantalla té FreeSync o G-Sync i està engegat. Desactivat, la generació de "
+"fotogrames en «Automàtic» només fa els que divideixen la freqüència en parts iguals, perquè el "
+"moviment no faci salts."
+
+msgctxt "UI_MENU_LOW_LATENCY"
+msgid "Low latency"
+msgstr "Latència baixa"
+
+msgctxt "UI_MENU_LOW_LATENCY_DESC"
+msgid ""
+"Starts each frame as late as your computer allows, so what you press reaches the screen sooner. "
+"Matters most at 20 or 15 fps and with Frame generation. Turn it off if the picture stutters."
+msgstr ""
+"Inicia cada fotograma tan tard com permeti l'ordinador, perquè el que prems arribi abans a la "
+"pantalla. Importa sobretot a 20 o 15 fps i amb Generació de fotogrames. Desactiva-la si la imatge "
+"fa salts."
 
 msgctxt "UI_MENU_GRAPHICS"
 msgid "Picture"
@@ -506,6 +564,45 @@ msgstr "Nitidesa de FSR"
 msgctxt "UI_MENU_SHARPNESS_DESC"
 msgid "Sharpening after FSR scaling; 0 turns it off."
 msgstr "Enfocament després de l'escalat FSR; 0 el treu."
+
+#. Under Sharpness, greyed out, when the upscaler is not AMD FSR 1.
+msgctxt "UI_MENU_SHARPNESS_FSR_ONLY"
+msgid "With AMD FSR 1 only"
+msgstr "Només amb AMD FSR 1"
+
+#. Group heading on the Graphics tab: internal resolution and upscaling.
+msgctxt "UI_MENU_GROUP_RESOLUTION"
+msgid "Resolution"
+msgstr "Resolució"
+
+#. Group heading on the Graphics tab: frame rate, frame generation, overlay.
+msgctxt "UI_MENU_GROUP_PERFORMANCE"
+msgid "Performance"
+msgstr "Rendiment"
+
+#. Graphics tab button: Auto-set.
+msgctxt "UI_MENU_AUTOSET"
+msgid "Best settings for this PC"
+msgstr "Els millors ajustos d'aquest PC"
+
+#. Description of Best settings for this PC.
+msgctxt "UI_MENU_AUTOSET_DESC"
+msgid ""
+"Picks the Quality preset, the internal resolution and AMD FSR 1 from your graphics card and "
+"screen. A first guess: change anything afterwards."
+msgstr ""
+"Tria la preconfiguració de Qualitat, la resolució interna i AMD FSR 1 segons la teva targeta "
+"gràfica i la pantalla. És només una primera proposta: després canvia el que vulguis."
+
+#. Puts back what Best settings for this PC changed.
+msgctxt "UI_MENU_AUTOSET_UNDO"
+msgid "Undo best settings"
+msgstr "Desfer els millors ajustos"
+
+#. Description of Undo best settings.
+msgctxt "UI_MENU_AUTOSET_UNDO_DESC"
+msgid "Puts back the rows Best settings for this PC changed."
+msgstr "Restaura les files que va canviar «Els millors ajustos d'aquest PC»."
 
 msgctxt "UI_MENU_GAME_LANG"
 msgid "Game language"
@@ -2162,11 +2259,6 @@ msgstr ""
 "mod pot no veure's o fer malbé la imatge"
 
 #. printf format: keep every %... conversion, in the same order.
-msgctxt "UI_LAUNCH_UPDATE"
-msgid "Update to %s (%d MB)"
-msgstr "Actualitzar a %s (%d MB)"
-
-#. printf format: keep every %... conversion, in the same order.
 msgctxt "UI_LAUNCH_UPDATE_FETCHING"
 msgid "Downloading %s"
 msgstr "Baixant %s"
@@ -2180,6 +2272,299 @@ msgstr "No s'ha pogut actualitzar: %s"
 msgctxt "UI_LAUNCH_UPDATED"
 msgid "Updated to %s: setting up again what it changed"
 msgstr "Actualitzat a %s: preparant de nou el que ha canviat"
+
+#. The update card's title; %s is the release (v0.1.12).
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_LAUNCH_UPDATE_TITLE"
+msgid "Update available: %s"
+msgstr "Actualització disponible: %s"
+
+#. Under it: %s the version in use, %d the download in MB.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_LAUNCH_UPDATE_DETAIL"
+msgid "You have %s · %d MB to download"
+msgstr "Tens %s · %d MB per descarregar"
+
+#. The update card's button: downloads and installs it.
+msgctxt "UI_LAUNCH_UPDATE_NOW"
+msgid "Update"
+msgstr "Actualitzar"
+
+#. Opens the release's notes on GitHub.
+msgctxt "UI_LAUNCH_WHATS_NEW"
+msgid "What's new"
+msgstr "Novetats"
+
+#. After a failed download.
+msgctxt "UI_LAUNCH_RETRY"
+msgid "Try again"
+msgstr "Torna-ho a provar"
+
+#. The game files' state with the game version the setup installed.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_LAUNCH_FILES_READY_AS"
+msgid "Game files ready (version %s)"
+msgstr "Fitxers del joc llestos (versió %s)"
+
+#. Under Play: %s is the first controller's name.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_LAUNCH_PAD"
+msgid "Controller: %s"
+msgstr "Comandament: %s"
+
+#. Under Play when no controller is connected.
+msgctxt "UI_LAUNCH_PAD_NONE"
+msgid "No controller connected"
+msgstr "Cap comandament connectat"
+
+#. On the controller row: opens the Controls tab.
+msgctxt "UI_LAUNCH_CONFIGURE"
+msgid "Configure"
+msgstr "Configurar"
+
+#. Offered once on the start screen after the setup.
+msgctxt "UI_LAUNCH_SHORTCUT_ASK"
+msgid "Start the game from your desktop"
+msgstr "Juga des de l'escriptori"
+
+#. Makes the desktop shortcut.
+msgctxt "UI_LAUNCH_SHORTCUT_MAKE"
+msgid "Create shortcut"
+msgstr "Crea una drecera"
+
+#. Puts the offer away; the button stays on the Game files page.
+msgctxt "UI_LAUNCH_NOT_NOW"
+msgid "Not now"
+msgstr "Ara no"
+
+#. The keys, at the lower right of the start screen.
+msgctxt "UI_LAUNCH_KEYS"
+msgid "Enter or A: select · F11: fullscreen"
+msgstr "Retorn o A: selecciona · F11: pantalla completa"
+
+#. Beside the Settings title on the start screen.
+msgctxt "UI_LAUNCH_SETTINGS_NOTE"
+msgid "Changes are saved and apply when you press Play"
+msgstr "Els canvis es desen i s'apliquen en prémer Jugar"
+
+#. Step 1 of the setup before the player picks their copy.
+msgctxt "UI_LAUNCH_NO_SOURCE"
+msgid "No copy chosen yet"
+msgstr "Encara no has triat la teva còpia"
+
+#. Under Copy into the game folder.
+msgctxt "UI_LAUNCH_ROMFS_COPY_NOTE"
+msgid "Uses 23 GB more disk space; your copy can be deleted afterwards"
+msgstr "Fa servir 23 GB més de disc; després pots esborrar la teva còpia"
+
+#. Under Use it where it is.
+msgctxt "UI_LAUNCH_ROMFS_LINK_NOTE"
+msgid "No extra disk space; your copy has to stay where it is"
+msgstr "Cap espai extra al disc; la teva còpia s'ha de quedar on és"
+
+#. Under Set up: %s is the game folder.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_LAUNCH_INSTALLS_TO"
+msgid "Installs to %s"
+msgstr "S'instal·la a %s"
+
+#. What a setup installed: label.
+msgctxt "UI_LAUNCH_INFO_VERSION"
+msgid "Game version"
+msgstr "Versió del joc"
+
+#. What a setup installed: label; the value is MKW Recomp and its version.
+msgctxt "UI_LAUNCH_INFO_PORT"
+msgid "Set up by"
+msgstr "Preparat per"
+
+#. What a setup installed: label; the value says how it is kept.
+msgctxt "UI_LAUNCH_INFO_ROMFS"
+msgid "RomFS"
+msgstr "RomFS"
+
+#. How the RomFS is kept, after the setup.
+msgctxt "UI_LAUNCH_ROMFS_COPIED"
+msgid "Copied into the game folder"
+msgstr "Copiat a la carpeta del joc"
+
+#. How the RomFS is kept, after the setup.
+msgctxt "UI_LAUNCH_ROMFS_LINKED"
+msgid "Used where it is"
+msgstr "Usat on és"
+
+#. Shows the game folder in the file manager.
+msgctxt "UI_LAUNCH_OPEN_FOLDER"
+msgid "Open folder"
+msgstr "Obre la carpeta"
+
+#. Under Set up again, folded on the Game files page once the game is set up.
+msgctxt "UI_LAUNCH_SETUP_AGAIN_HINT"
+msgid "After a game update, or when the game files look damaged. The steps already done are kept."
+msgstr ""
+"Després d'una actualització del joc, o si els fitxers del joc semblen malmesos. Els passos ja "
+"fets es conserven."
+
+#. The start screen's page with the saves, the shortcuts, the updates and reporting a problem.
+msgctxt "UI_LAUNCH_TOOLS"
+msgid "Tools"
+msgstr "Eines"
+
+#. Tools page heading.
+msgctxt "UI_TOOLS_SAVES"
+msgid "Saves"
+msgstr "Partides"
+
+#. Tools page row.
+msgctxt "UI_TOOLS_BACKUP"
+msgid "Back up saves"
+msgstr "Còpia de seguretat de les partides"
+
+#. Under Back up saves: %s is the player's name.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_BACKUP_NOTE"
+msgid "A zip of %s's saves in the game folder's backups"
+msgstr "Un zip amb les partides de %s a la carpeta backups del joc"
+
+#. After a backup: %s is the zip file.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_BACKUP_DONE"
+msgid "Saved: %s"
+msgstr "Desat: %s"
+
+#. Button of Back up saves.
+msgctxt "UI_TOOLS_BACKUP_BUTTON"
+msgid "Back up"
+msgstr "Crea la còpia"
+
+#. Tools page row with the two folders' buttons.
+msgctxt "UI_TOOLS_SAVES_FOLDERS"
+msgid "Saves and backups"
+msgstr "Partides i còpies"
+
+#. Shows the player's saves folder.
+msgctxt "UI_TOOLS_OPEN_SAVES"
+msgid "Open saves"
+msgstr "Obre les partides"
+
+#. Shows the backups folder.
+msgctxt "UI_TOOLS_OPEN_BACKUPS"
+msgid "Open backups"
+msgstr "Obre les còpies"
+
+#. Tools page heading.
+msgctxt "UI_TOOLS_SHORTCUTS"
+msgid "Shortcuts"
+msgstr "Dreceres"
+
+#. Tools page row.
+msgctxt "UI_TOOLS_STEAM"
+msgid "Add to Steam"
+msgstr "Afegeix a Steam"
+
+#. Under Add to Steam.
+msgctxt "UI_TOOLS_STEAM_NOTE"
+msgid "As a non-Steam game, for Big Picture and the Steam Deck"
+msgstr "Com a joc que no és de Steam, per a Big Picture i Steam Deck"
+
+#. Button of Add to Steam.
+msgctxt "UI_TOOLS_ADD"
+msgid "Add"
+msgstr "Afegeix"
+
+#. After Add to Steam.
+msgctxt "UI_TOOLS_STEAM_DONE"
+msgid "Added to Steam"
+msgstr "S'ha afegit a Steam"
+
+#. After Add to Steam while Steam runs.
+msgctxt "UI_TOOLS_STEAM_RESTART"
+msgid "Added: restart Steam to see it"
+msgstr "Afegit: reinicia Steam per veure'l"
+
+#. Why Add to Steam failed.
+msgctxt "UI_TOOLS_STEAM_NONE"
+msgid "Steam is not installed for this user"
+msgstr "Steam no està instal·lat per a aquest usuari"
+
+#. Tools page heading.
+msgctxt "UI_TOOLS_UPDATES"
+msgid "Updates"
+msgstr "Actualitzacions"
+
+#. The version in use: %s.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_VERSION"
+msgid "Version %s"
+msgstr "Versió %s"
+
+#. Looks for a new version.
+msgctxt "UI_TOOLS_CHECK"
+msgid "Check now"
+msgstr "Cerca ara"
+
+#. While the check runs.
+msgctxt "UI_TOOLS_CHECKING"
+msgid "Checking for a new version..."
+msgstr "S'està cercant una versió nova..."
+
+#. Tools page row: %s is the version before the last update.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_UNDO_ROW"
+msgid "Go back to %s"
+msgstr "Torna a %s"
+
+#. Under Go back to.
+msgctxt "UI_TOOLS_UNDO_NOTE"
+msgid "The version before the last update; the launcher starts again"
+msgstr "La versió anterior a l'última actualització; el llançador es torna a obrir"
+
+#. Button that puts back the version before the last update.
+msgctxt "UI_TOOLS_UNDO"
+msgid "Undo update"
+msgstr "Desfes l'actualització"
+
+#. Confirmation: %s is that version.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_UNDO_ASK"
+msgid "Go back to %s? The launcher starts again and sets up again what differs."
+msgstr "Voleu tornar a %s? El llançador es torna a obrir i prepara de nou el que canviï."
+
+#. Tools page heading.
+msgctxt "UI_TOOLS_PROBLEMS"
+msgid "Problems"
+msgstr "Problemes"
+
+#. Tools page row.
+msgctxt "UI_TOOLS_REPORT"
+msgid "Report a problem"
+msgstr "Informa d'un problema"
+
+#. Under Report a problem.
+msgctxt "UI_TOOLS_REPORT_NOTE"
+msgid "Copies your system's details and opens the bug report form, to paste them in"
+msgstr "Copia les dades del teu sistema i obre el formulari d'errors per enganxar-les"
+
+#. Button of Report a problem.
+msgctxt "UI_TOOLS_REPORT_BUTTON"
+msgid "Report"
+msgstr "Informa"
+
+#. After Report.
+msgctxt "UI_TOOLS_REPORT_COPIED"
+msgid "Your system's details are on the clipboard: paste them in the form"
+msgstr "Les dades del teu sistema són al porta-retalls: enganxa-les al formulari"
+
+#. Tools page row with the log folder's button.
+msgctxt "UI_TOOLS_LOGS"
+msgid "Logs"
+msgstr "Registres"
+
+#. A Tools page action that did not work: %s says why.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_FAILED"
+msgid "Failed: %s"
+msgstr "Ha fallat: %s"
 
 msgctxt "UI_LAUNCH_NO_GAME_DATA"
 msgid "Your own copy of the game · No game data included"
@@ -2231,13 +2616,19 @@ msgstr ""
 "En arrencar, pregunta a GitHub si hi ha una versió més nova del port i l'ofereix a la pantalla "
 "d'inici (uns segons com a màxim, res sense connexió)."
 
+msgctxt "UI_MENU_DISCORD"
+msgid "Discord status"
+msgstr ""
+
+msgctxt "UI_MENU_DISCORD_DESC"
+msgid ""
+"While the game runs, your Discord profile shows that you are playing, for how long, and whether "
+"you are racing or in the menus. Your Discord friends see it too."
+msgstr ""
+
 msgctxt "UI_LAUNCH_PLAYERS"
 msgid "Profiles"
 msgstr "Perfils"
-
-msgctxt "UI_LAUNCH_PLAYER"
-msgid "Profile: %s"
-msgstr "Perfil: %s"
 
 msgctxt "UI_PLAYER_NOTE"
 msgid ""

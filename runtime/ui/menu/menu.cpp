@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "imgui.h"
+#include "ui/menu/id_check.h"
 #include "imgui_internal.h"   // SetFocusID, NavCursorVisible
 #include "backends/imgui_impl_vulkan.h"
 #include "ui/menu/binds_page.h"
@@ -28,6 +29,7 @@
 extern "C" {
 #include "cfg.h"
 #include "fs.h"
+#include "hacks.h"
 #include "input.h"
 #include "input_map.h"
 #include "perfmon.h"
@@ -174,6 +176,7 @@ static void make_context(void) {
     io.BackendPlatformName = "mkw_menu";
     menu_look_style(g_base_style);
     ImGui::GetStyle() = g_base_style;
+    ui_id_check_init();
     g_ctx_ok = 1;
 }
 
@@ -350,6 +353,7 @@ static uint64_t g_perf_last_ns, g_perf_win_ns, g_perf_max_ns;
 static int g_perf_frames, g_perf_game;   // presents and game frames in the window
 static uint64_t g_perf_last_frame;
 static char g_perf_text[96];
+static float g_perf_game_fps, g_perf_shown_fps;   // the last window's rates, for the full panel too
 
 static int perf_mode_of(const char *s) { return !strcmp(s, "full") ? 2 : !strcmp(s, "fps") ? 1 : 0; }
 
@@ -396,7 +400,8 @@ static void perf_tick(uint64_t now, uint64_t frame, const MenuTarget *t) {
         }
         g_perf_mode = m;
     }
-    if (g_perf_mode != 1) return;
+    // full counts the window too: its rate is the game's frames, and with frame generation the panel shows both
+    if (!g_perf_mode) return;
     uint64_t d = now - g_perf_last_ns;
     bool game = frame != g_perf_last_frame;   // (each present of frame generation's made frames has the same number)
     g_perf_last_frame = frame;
@@ -410,6 +415,7 @@ static void perf_tick(uint64_t now, uint64_t frame, const MenuTarget *t) {
         if (d > g_perf_max_ns) g_perf_max_ns = d;
         if (g_perf_win_ns >= 500000000ull) {
             double s = 1e9 / (double)g_perf_win_ns;
+            g_perf_game_fps = (float)(g_perf_game * s), g_perf_shown_fps = (float)(g_perf_frames * s);
             if (strcmp(cfg_value("MKW_FRAMEGEN"), "off"))
                 snprintf(g_perf_text, sizeof g_perf_text, menu_text(UI_PERF_LINE_FPS_FG), g_perf_game * s, g_perf_frames * s);
             else
@@ -512,13 +518,16 @@ static void perf_full_draw(const MenuTarget *t, float scale) {
     const ImVec4 gpu_c(0.55f, 0.83f, 0.31f, 1), cpu_c(0.18f, 0.59f, 0.80f, 1), ram_c(0.80f, 0.45f, 0.70f, 1),
         fps_c(0.95f, 0.95f, 0.95f, 1), wait_c(0.93f, 0.76f, 0.33f, 1), pic_c(0.62f, 0.70f, 0.95f, 1);
     if (ImGui::BeginTable("##perft", 4, ImGuiTableFlags_SizingFixedFit)) {
-        static const UiTextId labels[] = {UI_MENU_OV_GPU, UI_MENU_OV_VRAM, UI_MENU_OV_CPU, UI_MENU_OV_RAM};
         static const PerfCol c0[] = {{UI_MENU_OV_FPS, 888}};
         static const PerfCol c1[] = {{UI_MENU_OV_FMT_PCT, 100}, {UI_MENU_OV_FMT_GB, 888.8f}, {UI_MENU_OV_FRAME_MS, 888.8f}};
         static const PerfCol c2[] = {{UI_MENU_OV_FMT_TEMP, 188}, {UI_MENU_OV_FMT_GB_OF, 888.8f}, {UI_MENU_OV_MAX_MS, 8888.8f}};
         static const PerfCol c3[] = {{UI_MENU_OV_FMT_POWER, 888}, {UI_MENU_OV_FMT_MHZ, 8888}, {UI_MENU_OV_GAME_PCT, 100},
                                      {UI_MENU_OV_GAME_GB, 888.8f}};
-        perf_column("##c0", c0, 1, labels, 4);
+        // (the frame-generation line's format is as wide as its widest text: "%.0f/%.0f fps" against "888/888 fps")
+        static const UiTextId labels0[] = {UI_MENU_OV_GPU, UI_MENU_OV_VRAM, UI_MENU_OV_CPU, UI_MENU_OV_RAM,
+                                           UI_PERF_LINE_FPS_FG};
+        bool fg = strcmp(cfg_value("MKW_FRAMEGEN"), "off") && g_perf_shown_fps > 0;
+        perf_column("##c0", c0, 1, labels0, fg ? 5 : 4);
         perf_column("##c1", c1, 3);
         perf_column("##c2", c2, 3);
         perf_column("##c3", c3, 4);
@@ -540,7 +549,10 @@ static void perf_full_draw(const MenuTarget *t, float scale) {
         perf_cell(UI_MENU_OV_GAME_GB, perf_gb(s.ram_game_mb));
         ImGui::TableNextColumn();   // the frame row: no label, the rate in its place
         char b[64];
-        snprintf(b, sizeof b, menu_text(UI_MENU_OV_FPS), s.fps);
+        // with frame generation, "20/40 fps": the game's frames and what reaches the screen (s.fps counts only the
+        // game's, so 2x at 20 read "20 FPS" with 40 on screen, 15/11/2026)
+        if (fg) snprintf(b, sizeof b, menu_text(UI_PERF_LINE_FPS_FG), g_perf_game_fps, g_perf_shown_fps);
+        else snprintf(b, sizeof b, menu_text(UI_MENU_OV_FPS), s.fps);
         ImGui::TextColored(fps_c, "%s", b);
         perf_cell(UI_MENU_OV_FRAME_MS, s.frame_ms_avg);
         perf_cell(UI_MENU_OV_MAX_MS, s.frame_ms_max);
@@ -599,6 +611,7 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
     if (g_test.next_set < g_test.n_sets && frame >= g_test.sets[g_test.next_set].frame) test_apply_sets(frame);
     if (g_perf_save.exchange(0)) cfg_save();
     perf_tick(plat_now_ns(), frame, t);
+    classic_poll();   // MKW_CLASSIC_GP or _VS changed: the cups and routes in the game's memory (core/hacks/classic.c)
     bool open = g_open.load(std::memory_order_relaxed);
     if (!open) {
         if (g_save_pending) g_save_pending = opt_save_tick(1);   // closed: the last change goes to mkw.ini now
@@ -654,6 +667,7 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
         plat_mutex_unlock(&ev_lock);
     }
     ImGui_ImplVulkan_NewFrame();
+    ui_id_check("in-game menu");
     ImGui::NewFrame();
     if (open) layout_menu(t->width, t->height, scale);
     perf_draw(t, scale);

@@ -19,6 +19,7 @@ Usage: python sm86/spec/spec.py [--out build/sm86] [--cache scratchpad/nvidia] [
 
 import argparse
 import hashlib
+import ssl
 import json
 import os
 import re
@@ -75,10 +76,18 @@ PTX = """.version 8.7
 FETCH_TRIES = 3
 
 
+def https_context() -> ssl.SSLContext:
+    """The CA file the setup chose (prepare.py exports it as SSL_CERT_FILE when the system's store is empty or
+    unreadable to this Python), explicitly: on Windows the default context reads the system store whatever the variable
+    says, and a certificate in it Python cannot parse stops every download (issue #456)."""
+    ca = os.environ.get("SSL_CERT_FILE")
+    return ssl.create_default_context(cafile=ca) if ca else ssl.create_default_context()
+
+
 def download(url: str, part: Path) -> str:
     """The file at url into part; a short read or a broken connection is the reason, else ""."""
     try:
-        with urllib.request.urlopen(url, timeout=60) as r, open(part, "wb") as f:
+        with urllib.request.urlopen(url, timeout=60, context=https_context()) as r, open(part, "wb") as f:
             size = int(r.headers.get("Content-Length") or 0)
             shutil.copyfileobj(r, f)
     except OSError as e:
@@ -230,28 +239,38 @@ def run_nvdisasm(nvdisasm: Path, lib: Path, cubin: Path) -> bytes:
 
 
 def capture(nvdisasm: Path, lib: Path, work: Path, out: Path) -> str:
-    """One interception of nvdisasm, cut and parsed into out/; the parser's complaint, or '' when the spec is good."""
+    """One interception of nvdisasm, cut and parsed into out/; the parser's complaint, or '' when the spec is good.
+
+    It parses in work/spec and moves the result to out/ only when the parser accepts it: a rejected capture left a
+    broken instructions.json in out/ that every later setup reused, since the shaders step only checks that it exists
+    (issue #325)."""
     dump = run_nvdisasm(nvdisasm, lib, work / "sm_86.cubin")
     (work / "sm_86_intercept.txt").write_text(strings(dump), encoding="ascii")
     p = subprocess.run([sys.executable, str(HERE / "funnel.py"), str(work / "sm_86_intercept.txt")],
                        capture_output=True, text=True)  # fmt: skip
     if p.returncode:
         return f"funnel.py: {p.stderr[-2000:]}"
-    out.mkdir(parents=True, exist_ok=True)
+    stage = work / "spec"
+    shutil.rmtree(stage, ignore_errors=True)
+    stage.mkdir()
     for name in ("sm_86_instructions.txt", "sm_86_latencies.txt"):
-        shutil.move(work / name, out / name)
+        shutil.move(work / name, stage / name)
     # Windows' text sometimes puts two rows of a table on one line ("0 0 -> 0          0 1 -> 1"), and the parser then
     # orders the table's rows differently: one row per line, as in Linux's text (a no-op there).
-    spec_txt = out / "sm_86_instructions.txt"
+    spec_txt = stage / "sm_86_instructions.txt"
     text = spec_txt.read_text(encoding="ascii")
     spec_txt.write_text(re.sub(r"(-> \S+)[ \t]{2,}(?=\d)", r"\1\n          ", text), encoding="ascii")
     # Exit 1 means "something was reported", not "no spec": the one known report (a missing separator in
     # f2f_f32_upconvert__RCR_RCR) is repaired by the parser itself, so anything beyond it fails.
-    p = subprocess.run([sys.executable, str(HERE / "parse_sidl.py"), str(spec_txt), "-o", str(out)],
+    p = subprocess.run([sys.executable, str(HERE / "parse_sidl.py"), str(spec_txt), "-o", str(stage)],
                        capture_output=True, text=True)  # fmt: skip
-    (out / "parse.log").write_text(p.stdout + p.stderr)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "parse.log").write_text(p.stdout + p.stderr)  # the last try's, accepted or not, for a report
     if p.returncode > 1 or not re.search(r"^unparsed / suspect items: [01]$", p.stdout, re.M):
         return f"parse_sidl.py: {p.stdout[-2000:]}{p.stderr[-2000:]}"
+    for f in stage.iterdir():
+        (out / f.name).unlink(missing_ok=True)  # Windows' rename refuses an existing target
+        shutil.move(f, out / f.name)
     return ""
 
 

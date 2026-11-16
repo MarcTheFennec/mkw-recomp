@@ -7,5 +7,5 @@ sets the language. At 1280 x 720, compressed with `pngquant` and `oxipng`; the g
 
 | File | What it shows |
 |---|---|
-| `launcher-main.png` | The main page once the game is set up (by @ViniciusStanula, from #70) |
+| `launcher-main.png` | The main page once the game is set up, with the link to the project's GitHub page at the lower right (first by @ViniciusStanula, from #70) |
 | `launcher-files.png` | The Game files page before the setup, cropped to its content |

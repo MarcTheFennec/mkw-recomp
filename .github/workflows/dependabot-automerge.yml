@@ -1,0 +1,44 @@
+# Merges Dependabot's PRs on its own once every CI job is green (minor and patch updates come grouped;
+# majors come one per PR and go through the same checks). Only runs for dependabot[bot].
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+jobs:
+  dependabot:
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    steps:
+      - name: Wait for CI
+        uses: lewagon/wait-on-check-action@v1.9.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          running-workflow-name: dependabot
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 30
+          # The job names of ci.yml: renaming one there needs it renamed here.
+          check-regexp: '^(checks|setup-windows|linux|linux-aarch64|windows)$'
+
+      - name: Approve
+        run: gh pr review --approve "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge (retried while main moves under it)
+        run: |
+          for attempt in 1 2 3 4 5; do
+            gh pr merge --squash --delete-branch "$PR_URL" && exit 0
+            echo "merge attempt $attempt failed, retrying in 30 s"
+            sleep 30
+          done
+          exit 1
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

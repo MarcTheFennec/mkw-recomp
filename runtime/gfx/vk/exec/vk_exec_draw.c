@@ -63,7 +63,7 @@ void vk_exec_draw_new_cb(void) {
 void vk_exec_draw_forget(void) {
     vk_exec_draw_thread();
     B.pipe[0] = B.pipe[1] = VK_NULL_HANDLE;
-    B.st_valid = B.vb_valid = B.res_valid = 0;
+    B.st_valid = B.dyn_valid = B.vb_valid = B.res_valid = 0;
     B.ds_layout = VK_NULL_HANDLE;
     B.ds_bound[0] = B.ds_bound[1] = VK_NULL_HANDLE;
     B.ds_pushed[0] = B.ds_pushed[1] = 0;
@@ -614,9 +614,13 @@ int prepare_draw_ex(VkExec *ex, int prim, int32_t count, int restart, int mesh) 
     recent_note(vs, fs);
     vk_crumb_draw(ex->cb, gfx_shader_key(vs), fs ? gfx_shader_key(fs) : NULL, (uint32_t)count);
     if (!B.st_valid || memcmp(&B.st, &s, sizeof s)) {
-        vk_pipeline_set_dynamic(ex->cb, &s);
+        // MKW_DYN_DIFF (default 1; "ab": in the B blocks): only the dynamic states whose value changed since they were
+        // set in this command buffer, pipeline binds between them or not; 0: all of them after a bind or a change
+        static int diff = -1;
+        if (diff < 0) diff = rt_knob("DYN_DIFF", "1");
+        vk_pipeline_set_dynamic(ex->cb, &s, RT_KNOB_ON(diff) && B.dyn_valid ? &B.st : NULL);
         ex->recorded++;
-        B.st = s, B.st_valid = 1;
+        B.st = s, B.st_valid = B.dyn_valid = 1;
     }
     record_fixed(ex);
     repeat_stats(ex, info);

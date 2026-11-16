@@ -21,7 +21,7 @@ void ru_log(void);   // MKW_TRACE=perf: hits, misses by cause
 // What a draw being captured resolves (ru_cap is set only then, on the replay thread).
 typedef struct RuCap RuCap;
 extern _Thread_local RuCap *ru_cap;
-enum { RUK_STABLE = 0, RUK_UBO, RUK_C0, RUK_SUP };   // a dynamic descriptor: what gives its buffer and offset
+enum { RUK_STABLE = 0, RUK_UBO, RUK_C0, RUK_SUP, RUK_C24 };   // a dynamic descriptor: what gives its buffer and offset
 enum { RUB_VOLATILE = 1, RUB_WRITTEN, RUB_UBO_PTR, RUB_STORAGE_IMG, RUB_SCRATCH_INDEX, RUB_NO_TPL, RUB_TOO_MANY };
 void ru_note_mem(uint64_t addr, uint64_t size, const VkMemSpan *sp, int ok);
 void ru_note_tex(uint64_t h, VkImage image, int storage);

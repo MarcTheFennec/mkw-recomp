@@ -257,7 +257,30 @@ static int test_astc(void) {
 // ---- formats ----
 static unsigned n_mapped, n_supported, n_unmapped, n_unsupported, n_fallback;
 
+// imageGranularity in texels (NVIDIA) or in 4x4 blocks (Intel's Windows driver, #476): both come out in texels.
+static int test_granularity(void) {
+    static const struct { VkFormat f; uint32_t gw, gh, want_w, want_h; } c[] = {
+        {VK_FORMAT_BC7_SRGB_BLOCK, 256, 256, 256, 256},   // NVIDIA, RTX 3050 (#443's log)
+        {VK_FORMAT_BC7_SRGB_BLOCK, 64, 64, 256, 256},     // Intel Arc B580 (#476's log)
+        {VK_FORMAT_BC6H_UFLOAT_BLOCK, 64, 64, 256, 256},
+        {VK_FORMAT_BC1_RGBA_UNORM_BLOCK, 512, 256, 512, 256},
+        {VK_FORMAT_BC1_RGBA_UNORM_BLOCK, 128, 64, 512, 256},
+        {VK_FORMAT_R8G8B8A8_UNORM, 128, 128, 128, 128},
+    };
+    for (size_t i = 0; i < sizeof c / sizeof *c; i++) {
+        uint32_t w = c[i].gw, h = c[i].gh;
+        vk_sparse_granularity_texels(c[i].f, &w, &h);
+        if (w != c[i].want_w || h != c[i].want_h) {
+            printf("probe-vkmem: FAIL sparse granularity %ux%u of VkFormat %d -> %ux%u, want %ux%u\n", c[i].gw, c[i].gh,
+                   (int)c[i].f, w, h, c[i].want_w, c[i].want_h);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int test_formats(void) {
+    if (test_granularity()) return 1;
     if (!vk_init()) { printf("probe-vkmem: FAIL vk_init\n"); return 1; }
     printf("probe-vkmem: GPU %s\n", vk_ctx()->props.deviceName);
     for (int f = 0; f <= 0x9C; f++) {
@@ -627,6 +650,51 @@ static int test_textures(pool_t *tpool, pool_t *phys) {
     return 0;
 }
 
+// Device-local memory full (#443: RTX 3050 4 GB, chunks left empty drew a dark band): with the device-local heap capped
+// by MKW_GPU_MEM_LIMIT_HEAP<n> (heap 0 on a discrete GPU, heap 1 on the Radeon 660M: the log's "mem: types" line),
+// fill what device-local memory is left, then back a physical pool; its chunk has to land outside device-local memory
+// and the GPU write through a virtual page has to read back. Skipped without a cap: it would fill a real GPU's VRAM.
+static int test_phys_full(uint8_t *h) {
+    int capped = 0;
+    for (int i = 0; i < 16 && !capped; i++) {
+        char name[32];
+        snprintf(name, sizeof name, "MKW_GPU_MEM_LIMIT_HEAP%d", i);
+        capped = cfg_get(name) != NULL;
+    }
+    if (!capped) {
+        printf("probe-vkmem: physical pool with device-local memory full: skipped (needs MKW_GPU_MEM_LIMIT_HEAP<n>=1 on "
+               "the device-local heap)\n");
+        return 0;
+    }
+    VkCtx *c = vk_ctx();
+    enum { MAX_FILL = 16384 };
+    VmaAllocation *fill = calloc(MAX_FILL, sizeof *fill);
+    int n = 0;
+    VkMemoryRequirements req = {.size = 64 << 10, .alignment = 64 << 10, .memoryTypeBits = ~0u};
+    VmaAllocationCreateInfo aci = {.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT};
+    while (n < MAX_FILL && vmaAllocateMemory(c->vma, &req, &aci, &fill[n], NULL) == VK_SUCCESS) n++;
+    VkMemStats before, after;
+    vk_mem_stats(&before);
+    pool_t phys = {.magic = NVN_POOL_MAGIC, .flags = 0x189, .mem = (uint8_t *)(uintptr_t)(RT_GPU_VA_BASE + 0x300000000ull),
+                   .size = 0x40000, .game_mem = h + 0xa00000, .span = 0x40000};
+    pool_t virt = {.magic = NVN_POOL_MAGIC, .flags = 0x2a1, .mem = (uint8_t *)(uintptr_t)(RT_GPU_VA_BASE + 0x400000000ull),
+                   .size = 0x80000, .span = 0x80000};
+    int bad = n == MAX_FILL || test_virtual(&phys, &virt);
+    vk_mem_stats(&after);
+    vk_pool_fini(&virt), vk_pool_fini(&phys);
+    for (int i = 0; i < n; i++) vmaFreeMemory(c->vma, fill[i]);
+    free(fill);
+    GCHECK(!bad, "device-local memory still had room after %d blocks of 64 KiB, or the pool drew wrong", n);
+    GCHECK(after.phys_host_chunks > before.phys_host_chunks && after.phys_failed_chunks == before.phys_failed_chunks,
+           "chunks outside device-local memory %llu -> %llu, failed %llu -> %llu", (unsigned long long)before.phys_host_chunks,
+           (unsigned long long)after.phys_host_chunks, (unsigned long long)before.phys_failed_chunks,
+           (unsigned long long)after.phys_failed_chunks);
+    printf("probe-vkmem: physical pool with device-local memory full (%d KiB filled): backed outside it and drawn right\n",
+           n * 64);
+    g_gpu_checks += 2;
+    return 0;
+}
+
 static int test_gpu(void) {
     uint64_t heap = 0;
     GCHECK(mem_set_heap_size(16ull << 20, &heap) == 0 && heap, "SetHeapSize 16 MiB");
@@ -641,6 +709,7 @@ static int test_gpu(void) {
     if (vk_mem_shadow_on() && test_merge(&pool)) return 1;
     GCHECK(vk_pool_init(&tpool), "vk_pool_init of the texture pool");
     if (test_textures(&tpool, &phys)) return 1;
+    if (test_phys_full(h)) return 1;
     const char *cap = cfg_get("MKW_SHADOW_SUBMIT");   // a measurement, off by default
     if (vk_mem_shadow_on() && cap && !strcmp(cap, "1") && test_capture(&pool)) return 1;
     VkMemStats st;

@@ -34,7 +34,9 @@ enum {
     CAP_END,
     CAP_GPUMEM,       // {addr, len} + len bytes: a physical pool chunk as the GPU left it (vk_mem_phys_dump)
     CAP_SPARSE,       // {klen, len} + key + len bytes: a sparse tile slot (vk_sparse_dump)
+    CAP_WIMG,         // CapWimg + bytes: layers of a decoded ASTC image as the image holds them (vk_texture_decoded)
     // new types go after CAP_END: the numbers above are in every capture already written
+    CAP_LAST = CAP_WIMG,
 };
 typedef struct { uint32_t type, pad; uint64_t size; } CapHdr;
 typedef struct {
@@ -47,6 +49,7 @@ typedef struct {
 typedef struct { int32_t id, has_view; tex_t t; view_t v; } CapTexReg;
 typedef struct { tex_t t; int32_t has_crop, crop[4]; } CapPresent;
 typedef struct { tex_t t; int32_t has_view, pad; view_t v; NVNcopyRegion r; uint64_t row, img, bytes; } CapWtex;
+typedef struct { tex_t t; uint32_t format, level, layer, nlayers; uint64_t bytes; } CapWimg;   // format: the VkFormat
 
 // cap_io.c: the zstd stream. Writer: one thread at a time (callers hold their own lock).
 typedef struct CapOut CapOut;

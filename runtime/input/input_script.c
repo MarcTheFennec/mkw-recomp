@@ -103,19 +103,32 @@ static void script_add(const ScriptEv *e) {
 
 // MKW_QUICK_RACE (Hacks tab): the menus pressed through by phase (seqwatch.c turns the watch on
 // for it). tt: a time trial, Mario, standard kart, the course the map offers (the title's; fixed with MKW_SEED, tt6a/b),
-// alone (tt2: race 29,6 s after boot); free:
-// free roam, the main menu's Plus (Tab on the keyboard).
+// alone (tt2: race 29,6 s after boot); gp: a Grand Prix, the first entry everywhere (the character, kart and cup the
+// menus offer: the save's last ones), against 23 rivals; free: free roam, the main menu's Plus (Tab on the keyboard).
 static const char *const quick_tt[] = {
     "TitleWait+40 A 6",       "TitleMenuMain+40 A 6",     "TitleMenuMain+160 DOWN 6", "TitleMenuMain+190 DOWN 6",
     "TitleMenuMain+230 A 6",  "PartsSelectEx+60 A 6",     "PartsSelectEx+180 A 6",    "VSStageSelect+60 A 6",
     "MenuTimeAttackMain+60 A 6", "SimpleConfirm+40 A 6",
 };
+// gp: GrandprixListup takes the cup and then its start; a third A there lands on SimpleConfirm or later when the second
+// already went on. IntoRace2 starts the course's flyover, which A skips (a press, not a hold: four of them, 3 s apart). The race
+// needs no A: Smart Steering and Auto-Accelerate (the game's own options, kept in the save) drive the kart, as they
+// cannot in a time trial; without them A held after the flyover keeps the kart moving, into the walls.
+// Steam Deck, 14/11/2026 (1.8.0): A pressed every 1.5 s reached the race (gp1); these are the presses that landed.
+static const char *const quick_gp[] = {
+    "TitleWait+40 A 6",         "TitleMenuMain+40 A 6",     "TitleMenuMain+230 A 6",   "PartsSelectEx+60 A 6",
+    "PartsSelectEx+180 A 6",    "GrandprixListup+60 A 6",   "GrandprixListup+150 A 6", "GrandprixListup+240 A 6",
+    "SimpleConfirm+40 A 6",     "IntoRace2+120 A 6",        "IntoRace2+300 A 6",       "IntoRace2+480 A 6",
+    "IntoRace2+660 A 6",        "IntoRace2+800 A 4320000",
+};
 static const char *const quick_free[] = {"TitleWait+40 A 6", "TitleMenuMain+60 PLUS 6"};
 
 static void script_load_quick(const char *mode) {
-    int free_roam = !strcmp(mode, "free");
-    const char *const *lines = free_roam ? quick_free : quick_tt;
-    int n = free_roam ? (int)(sizeof quick_free / sizeof *quick_free) : (int)(sizeof quick_tt / sizeof *quick_tt);
+    int free_roam = !strcmp(mode, "free"), gp = !strcmp(mode, "gp");
+    const char *const *lines = free_roam ? quick_free : gp ? quick_gp : quick_tt;
+    int n = free_roam ? (int)(sizeof quick_free / sizeof *quick_free)
+            : gp      ? (int)(sizeof quick_gp / sizeof *quick_gp)
+                      : (int)(sizeof quick_tt / sizeof *quick_tt);
     for (int i = 0; i < n; i++) {
         char line[64];
         ScriptEv e;

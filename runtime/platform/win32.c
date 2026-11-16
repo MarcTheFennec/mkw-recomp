@@ -100,6 +100,47 @@ int plat_cpu_cores(uint64_t *all, uint64_t *first) {
     return cores;
 }
 
+// Each physical core's processors and efficiency class (PROCESSOR_RELATIONSHIP, Windows 10 and later: 0 on a CPU with
+// one kind of core, higher on the faster cores of a hybrid one), group 0 only, within the process's affinity.
+static int core_masks(uint64_t mask[64], uint8_t cls[64]) {
+    DWORD_PTR proc, sys;
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys)) return 0;
+    DWORD len = 0;
+    GetLogicalProcessorInformationEx(RelationProcessorCore, NULL, &len);
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *buf = len ? malloc(len) : NULL;
+    int n = 0;
+    if (buf && GetLogicalProcessorInformationEx(RelationProcessorCore, buf, &len))
+        for (DWORD off = 0; off < len && n < 64;) {
+            SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *e = (void *)((char *)buf + off);
+            KAFFINITY m = e->Processor.GroupMask[0].Mask & proc;
+            if (e->Processor.GroupMask[0].Group == 0 && m) mask[n] = m, cls[n++] = e->Processor.EfficiencyClass;
+            off += e->Size;
+        }
+    free(buf);
+    return n;
+}
+
+uint64_t plat_cpu_core_of(int cpu) {
+    uint64_t mask[64];
+    uint8_t cls[64];
+    if (cpu < 0 || cpu > 63) return 0;
+    int n = core_masks(mask, cls);
+    for (int k = 0; k < n; k++)
+        if (mask[k] >> cpu & 1) return mask[k];
+    return 1ull << cpu;
+}
+
+uint64_t plat_cpu_fast(void) {
+    uint64_t mask[64], fast = 0;
+    uint8_t cls[64], top = 0;
+    int n = core_masks(mask, cls);
+    for (int k = 0; k < n; k++)
+        if (cls[k] > top) top = cls[k];
+    for (int k = 0; k < n; k++)
+        if (cls[k] == top) fast |= mask[k];
+    return fast;
+}
+
 int plat_process_affinity(uint64_t mask) { return SetProcessAffinityMask(GetCurrentProcess(), (DWORD_PTR)mask) != 0; }
 
 uint64_t plat_thread_cpu_ns(uint32_t tid) {

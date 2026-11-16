@@ -35,7 +35,9 @@ void warn_once(int key, const char *fmt, ...);   // vk_exec_draw.c
 typedef struct {
     VkPipeline pipe[2];                  // bound per bind point: 0 graphics, 1 compute
     VkPipeState st;                      // the state vk_pipeline_set_dynamic last recorded
-    int st_valid;
+    int st_valid;                        // st is what the bound pipeline was given (cleared at each graphics bind)
+    int dyn_valid;                       // st is still what the dynamic state was set from (kept across binds: every
+                                         // graphics pipeline lists the same dynamic states; MKW_DYN_DIFF)
     VkBuffer vb[17];                     // vertex buffers last bound
     VkDeviceSize vo[17], vsz[17], vstr[17];
     int vcls[17];                        // their pool class and pool record, for the census
@@ -53,7 +55,11 @@ typedef struct {
     VkBuffer c0_buf[3];
     VkDeviceSize c0_off[3];
     int c0_valid[3];
-    struct { p_bind_buf ssbo[16], ubo[16]; uint32_t dim[3], binst; uint8_t table[5]; uint64_t tex[128], img[32]; } c0_in[3];   // what vk_c0_fill read for c0[k]
+    struct { p_bind_buf ssbo[16], ubo[16]; uint32_t dim[3], binst; uint8_t table[5]; uint64_t tex[128], img[32]; uint8_t pc[NVN_C24_BYTES]; } c0_in[3];   // what vk_c0_fill read for c0[k]
+    uint8_t c24[3][NVN_C24_BYTES];       // last push-constant bank c24 per stage and where it lives (c24_info)
+    VkBuffer c24_buf[3];
+    VkDeviceSize c24_off[3];
+    int c24_valid[3];
     VkPipelineLayout ds_layout;          // graphics layout the sets below were last pushed or bound with
     VkDescriptorSet ds_bound[2];         // allocated set bound per set number (0: none or pushed since)
     VkDescriptorSet ds_last[2];          // last allocated and written set per set number, contents in DS

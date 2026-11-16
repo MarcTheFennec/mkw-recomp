@@ -476,6 +476,35 @@ NVN_API(nvnCommandBufferUpdateUniformBuffer) {
     memcpy(r->data, data, n);
 }
 
+// void nvnCommandBufferPush{Graphics,Compute}Constants[Deferred](NVNcommandBuffer *cmd, int stage, ptrdiff_t offset,
+// size_t size, const void *data): the driver writes the data into its own constant bank, which GLSLC-compiled shaders
+// read as c24 (5 of the 11 565 programs of 1.8.0; they read zeros before this op). Stage and size are clamped as the
+// driver clamps them (sdk+0x5d34b0: stage & 7, size to 256 bytes). The data is copied at record time, for the
+// Deferred forms too; MKW only calls the plain graphics form (stage 0 offset 0 size 16, title and race runs of
+// 15/11/2026), so a Deferred caller changing the data after the call would need a submit-time read like the
+// deferred binds above.
+// Compute's constants are kept as stage 5 (NVN_STAGE_CS, vk_draw_internal.h) whatever stage the game passes: MKW's
+// photo mode pushes them with stage 0 (ph8, 16/11/2026: "PushComputeConstants stage 0 offset 0 size 32"), which as
+// the vertex stage reached no compute program. The replay puts them in the dispatch's c0 (vk_exec_bind.c c0_info).
+// A graphics push reaches every graphics stage in the replay (vk_exec_ops.c OP_PUSH_CONST): MKW's SMAA passes push with
+// stage 0 and read the bank in their fragment shaders too.
+#define PUSH_STAGE_CS 5
+static void push_const(Cpu *c, int compute) {
+    uint64_t off = arg_x(c, 2), n = arg_x(c, 3);
+    if (off >= NVN_C24_BYTES) return;
+    if (n > NVN_C24_BYTES - off) n = NVN_C24_BYTES - off;
+    p_push_const *r = cmd_rec(cmd_of(c), OP_PUSH_CONST, offsetof(p_push_const, data) + n);
+    r->stage = compute ? PUSH_STAGE_CS : (int32_t)(arg_x(c, 1) & 7);
+    r->offset = (int32_t)off;
+    r->size = (int32_t)n;
+    r->pad_ = 0;
+    memcpy(r->data, arg_p(c, 4), n);
+}
+NVN_API(nvnCommandBufferPushGraphicsConstants) { push_const(c, 0); }
+NVN_API(nvnCommandBufferPushGraphicsConstantsDeferred) { push_const(c, 0); }
+NVN_API(nvnCommandBufferPushComputeConstants) { push_const(c, 1); }
+NVN_API(nvnCommandBufferPushComputeConstantsDeferred) { push_const(c, 1); }
+
 // ---------- submit
 // What the console reads at the submit call is read here, on the game thread: every handle must be a live recording,
 // and deferred binds take the handles the game's arrays hold now (the game fills its tables for the next frame as soon
@@ -681,7 +710,7 @@ const char *nvn_op_name(uint32_t op) {
         "DRAW_IDX", "DISPATCH", "BARRIER", "SET_TEX_POOL", "SET_SAMP_POOL", "COPY_B2T", "COPY_STRIDE", "BLEND_COLOR",
         "COPY_T2B", "BIND_IMG", "COPY_T2T", "RESET_COUNTER", "CLEAR_TEX", "DEPTH_CLAMP", "RENDER_ENABLE",
         "RASTER_DISCARD", "RENDER_COND", "PRIM_RESTART", "DRAW_IDX_IND", "DISPATCH_IND", "CLEAR_BUF", "DRAW_MESH", "ALPHA_REF",
-        "WAIT_EVENT", "QUEUE",
+        "WAIT_EVENT", "QUEUE", "PUSH_CONST",
     };
     _Static_assert(sizeof names / sizeof *names == OP_COUNT_, "one name per op");
     return op < OP_COUNT_ ? names[op] : "?";

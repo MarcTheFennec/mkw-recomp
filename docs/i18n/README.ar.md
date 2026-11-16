@@ -1,4 +1,4 @@
-<!-- translated from README.md c175259cbc98 -->
+<!-- translated from README.md dae9dd5efeb2 -->
 
 <p align="center"><img src="../logo.svg" width="128" alt="mkw-recomp logo"></p>
 
@@ -82,8 +82,8 @@ AArch64 على Linux)؛ لا يوجد مفسّر ولا JIT للمعالج. ول
 
 ## الأداء
 
-أزمنة الإطارات المقيسة، كل منها بتاريخه، موجودة في [docs/performance.md](../../docs/performance.md). لإضافة جهازك، افتح
-[تقرير أداء](https://github.com/adriadam10/mkw-recomp/issues/new?template=performance.yml): يدخل الجدول بتاريخ التقرير. هذه
+أزمنة الإطارات المقيسة، كل منها بالإصدار الذي اختُبر، موجودة في [docs/performance.md](../../docs/performance.md). لإضافة جهازك، افتح
+[تقرير أداء](https://github.com/adriadam10/mkw-recomp/issues/new?template=performance.yml): يدخل الجدول بالإصدار المذكور فيه. هذه
 الأزمنة هي إطارات اللعبة نفسها: توليد الإطارات يعرض إطارات أكثر لكنه لا يقصّرها. ‏16.7 ms تعني 60 إطارًا في الثانية؛ ومع ضبط
 Frame rate على Automatic (كما في الجهاز) ينخفض إلى 30 إطارًا عندما يتعذر بلوغ 60، والإطار الذي يتجاوز 33.3 ms يجعل السباق
 أبطأ من الزمن الحقيقي.

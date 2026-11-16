@@ -15,7 +15,8 @@ MKW's own environment variables:
 | `MKW_SPIRV` | Folder of the prepared SPIR-V (default `<exe>/spirv`) |
 | `MKW_SPIRV_DUMP=<dir>` | Dumps programs without prepared SPIR-V and logs the stack of those the game generates at run time |
 | `MKW_GPU_MEM_LIMIT=<MiB>` | Cap on the memory Vulkan allocates, split between heaps. On an integrated GPU that memory is RAM outside a memory-capped cgroup: without a cap, one run ended in the system OOM killer |
-| `MKW_GPU_CRUMBS=0/1/ab` | GPU breadcrumbs for a device loss, and for a GPU that stops 5 s without one (`vk/diag/vk_crumbs.c`, `VK_AMD_buffer_marker`, else NVIDIA checkpoints); on by default |
+| `MKW_GPU_CRUMBS=0/1/ab` | GPU breadcrumbs for a device loss, and for a GPU that stops without one, after 5 s, two fifths of amdgpu's explicit `lockup_timeout` (2 s on the Steam Deck), or 1 s when its timeout is unset or unavailable (`vk/diag/vk_crumbs.c`, `VK_AMD_buffer_marker`, else NVIDIA checkpoints); on by default |
+| `MKW_GPU_HANG_MS=<ms>` | When the breadcrumbs report a GPU that stopped without a device loss (`vk/device/vk_sync.c`; `0`: never) |
 | `MKW_VK_FORMAT_LIST=0/1` | Render targets list their view formats so RADV keeps DCC compression (smo-recomp `dcc-format-list`); on by default on integrated GPUs |
 | `MKW_VK_PLACED=1` | Experiment: every CPU-visible pool as driver memory mapped at its address (`VK_EXT_map_memory_placed`), without a shadow copy; one run reached frame 300 against 151 |
 | `MKW_TEXPRE=1` / `<dir>` | Precomputed BC7 of the ASTC textures (`vk_texpre.c`; `1`: `<exe>/texpre`). Off by default: slower than the GPU encoder; the ones it lacks are recorded in `<dir>/src` for `build/mkw --texpre` (`MKW_TEXPRE_RECORD=0`: don't; `MKW_TEXPRE_JOBS`: threads) |

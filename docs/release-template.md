@@ -15,7 +15,7 @@
   `-aarch64.AppImage`.
 - Windows 10/11 x64: unpack the zip into a folder and run `mkw.exe`.
 - Either: a Vulkan 1.3 GPU and about 30 GB free. Open **Game files**, point it at your own dump of Mario Kart World
-  1.0.0 or 1.8.0 (its `exefs/` and `romfs/`, or one `.nup` or `.nx` file) and press **Prepare**. Nothing of the game ships here: the setup builds it on your
+  1.0.0 or 1.8.0 (its `exefs/` and `romfs/`, or one `.nup` or `.nx` file) and press **Set up**. Nothing of the game ships here: the setup builds it on your
   machine and downloads NVIDIA's `nvdisasm` and `ptxas` (pinned by sha256; 84 MB on Linux, 126 MB on Windows) to
   describe the shader encoding.
 
@@ -23,7 +23,7 @@
 
 From 0.1.5 on, the start screen offers a newer release (**Update to vX**) and installs it: it downloads it, checks it,
 replaces the program and sets up again only what changed. From an older version, once by hand: Linux, run the new
-AppImage; Windows, unpack the new zip over the same folder; then press **Prepare** again (the steps already done are
+AppImage; Windows, unpack the new zip over the same folder; then press **Set up** again (the steps already done are
 skipped).
 
 ## Known issues

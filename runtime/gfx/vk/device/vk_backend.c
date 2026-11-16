@@ -47,6 +47,20 @@ static void wait_until(uint64_t at) {
     while (kern_now_ns() < at) plat_yield();
 }
 
+// Waits until at like wait_until, watching the timeline: how long before at the GPU finished value (the frame's last
+// blit), to the 0.5 ms; -1 when it had not by then.
+static int64_t ready_slack(uint64_t at, uint64_t value) {
+    uint64_t ready = 0;
+    for (;;) {
+        uint64_t now = kern_now_ns();
+        if (!ready && vk_sync_fence_done() >= value) ready = now;
+        if (now >= at) break;
+        if (at - now > 1000000) plat_wait_ns(500000);
+        else plat_yield();
+    }
+    return ready ? (int64_t)(at - ready) : -1;
+}
+
 static void present_main(void *arg) {
     (void)arg;
     uint64_t last = 0, last_queued = 0;
@@ -79,14 +93,15 @@ static void present_main(void *arg) {
         // with frame generation the first frame at the display time, or now when that has passed, the next ones one
         // step apart: the game's frame goes out last
         uint64_t first = nf && t0 > j.at ? t0 : j.at;
+        frame_jit_slack(j.at, ready_slack(nf ? first : j.at, f));   // MKW_LOW_LATENCY (core/boot/frame_jit.c)
         for (int k = 1; k < nf; k++) {
             wait_until(first + (uint64_t)(k - 1) * step);
-            vk_present_flip();
+            vk_lat_flip(j.at, k == 1, 0, vk_present_flip());   // MKW_LATENCY: the first made frame
         }
         uint64_t target = nf ? first + (uint64_t)(nf - 1) * step : j.at;
         wait_until(target);
         uint64_t t1 = kern_now_ns();
-        vk_present_flip();
+        vk_lat_flip(j.at, nf <= 1, 1, vk_present_flip());
         // MKW_TRACE=present: one line per present: the host present's interval, the interval of the game's present
         // calls (when the host present went out before back-edge pacing), the wait and how far past its target it went;
         // with frame generation, the game's frame and how many were shown before it
@@ -258,8 +273,12 @@ static void held_wait(Held *h) {
 // replay's recording is on the race frame's critical path (frame-carrera). rc-ab1..4
 // (6 cores with SMT, Radeon 660M, 08/11/2026): race frame -1.17 ms (means), -1.03 (medians) with the scene balanced.
 // wrc1/wrc1i (i5-8400, 6 cores without SMT, GTX 1050 Ti): +4.8 ms, a whole core taken from the game's threads. Fewer
-// cores were not measured. Assumes the last core's logical processors are the
-// highest-numbered ones (Linux and Windows number SMT siblings together). Applied at each present, on the replay thread.
+// cores were not measured. The core is the last of the fastest ones (plat_cpu_fast): the last core alone was an
+// efficiency core on a hybrid CPU, processor 27 of an i7-14700F at 4.2 GHz against 5.4, and the race frame took
+// +4.0 ms (means, +5.1 medians, scene balanced: rc1/rc1i, RX 6700 XT, 16/11/2026) against the replay thread left
+// unpinned. The others are every processor but those of that core (plat_cpu_core_of): taking the lower-numbered ones
+// assumed SMT siblings numbered together, which AMD's are not on Linux (0 and 16 on 16 cores), and left the game's
+// threads half the processors there. Applied at each present, on the replay thread.
 static void replay_core(void) {
     static int mode = -1, applied = 0;
     static uint64_t all, own, others;
@@ -268,9 +287,11 @@ static void replay_core(void) {
         int cores = plat_cpu_cores(&all, &first);
         mode = rt_knob("REPLAY_CORE", cores >= 6 && __builtin_popcountll(all) > cores ? "1" : "0");
         if (mode && cores >= 2) {
-            int c = 63 - __builtin_clzll(first);
-            own = 1ull << c, others = all & ((1ull << c) - 1);
-            rt_log("vk: the replay thread alone on processor %d, the others on %#llx%s (MKW_REPLAY_CORE)", c,
+            uint64_t fast = plat_cpu_fast() & first, pick = fast ? fast : first;
+            int c = 63 - __builtin_clzll(pick);
+            own = 1ull << c, others = all & ~plat_cpu_core_of(c);
+            rt_log("vk: the replay thread alone on processor %d (the last of %d %s cores), the others on %#llx%s "
+                   "(MKW_REPLAY_CORE)", c, __builtin_popcountll(pick), pick == first ? "physical" : "fastest",
                    (unsigned long long)others, mode == 2 ? " in the B blocks" : "");
         } else {
             mode = 0;
@@ -768,6 +789,8 @@ void vk_backend_shutdown(void) {
     gfx_exit_log();
     vk_present_drain();
     vk_sync_shutdown();
+    vk_rtstats_shutdown();
+    vk_dump_shutdown();
     vk_mem_shutdown();
     vk_shutdown();
 }

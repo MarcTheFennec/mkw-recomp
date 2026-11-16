@@ -218,12 +218,77 @@ static uint64_t released_cap(void) {
 // recreatable ones were enough: the cap was never passed in two cups (no "over the cap" line).
 static int recreatable(const Tex *e) { return e->pub.mirrored && !e->pub.gpu_owned && !e->gpu_dirty; }
 
+// A released GPU-written entry is kept for what was drawn in it, which the console keeps in the same memory. But only
+// until another image is written over that memory: then the console holds the newer contents there, and the entry has
+// nothing of its own left to come back with. 1.8.0 makes its shadow map again at each scene, at a new place in the
+// render-buffer pool 0x24000 bytes past the last (ph4, 16/11/2026: 4096x4096 D16, 96 MiB each, 61 addresses in 4
+// minutes of the title's demo runs): every one overlaps the next, all were kept as GPU-written, and the released ones
+// held 9.9 GB until the device ran out of memory (amdgpu: "Not enough memory for command submission", then device
+// lost); with the console's map, 3.3 GB after 50 s of a two-player race (sp1). Those whose memory a later write
+// (a newer wr_fence; an equal one is not counted) covers in part go, oldest first and only until the cap holds: the
+// game takes many back at the same key, and each one dropped is made again (the first version dropped every one it
+// found: 2 522 shadow maps made in rel1 against 204, the turbo's speed 1.67x against 1.90x). Writers larger than
+// WRITER_SPAN are left out of the search (the window it scans before each entry): they are textures, not render
+// targets.
+#define WRITER_SPAN (512ull << 20)
+typedef struct { uint64_t lo, hi, fence; } Span;
+static int by_lo(const void *a, const void *b) {
+    uint64_t x = ((const Span *)a)->lo, y = ((const Span *)b)->lo;
+    return (x > y) - (x < y);
+}
+static uint64_t overwritten_n, overwritten_bytes;
+static void drop_overwritten(void) {
+    Span *w = malloc(sizeof *w * (size_t)(by_key.n + 1));
+    Tex **gone = malloc(sizeof *gone * (size_t)(nreleased + 1));
+    if (!w || !gone) { free(w), free(gone); return; }
+    int nw = 0, ng = 0;
+    for (uint32_t i = 0; i < by_key.cap; i++) {
+        Tex *e = by_key.vals[i];
+        if (e && e->wr_fence && e->t.L.size && e->t.L.size <= WRITER_SPAN)
+            w[nw++] = (Span){e->key.addr, e->key.addr + e->t.L.size, e->wr_fence};
+    }
+    qsort(w, (size_t)nw, sizeof *w, by_lo);
+    uint64_t over = released_bytes - released_cap(), freed = 0;   // the caller: over the cap
+    for (Tex *e = rel_head; e && freed < over; e = e->rel_next) {
+        if (recreatable(e) || e->sparse || !e->wr_fence || !e->t.L.size) continue;
+        uint64_t lo = e->key.addr, hi = lo + e->t.L.size, from = lo > WRITER_SPAN ? lo - WRITER_SPAN : 0;
+        int a = 0, b = nw;   // the first writer starting at from or later
+        while (a < b) {
+            int m = (a + b) / 2;
+            if (w[m].lo < from) a = m + 1;
+            else b = m;
+        }
+        for (int k = a; k < nw && w[k].lo < hi; k++)
+            if (w[k].hi > lo && w[k].fence > e->wr_fence) { gone[ng++] = e, freed += e->rel_bytes; break; }
+    }
+    for (int i = 0; i < ng; i++) overwritten_n++, overwritten_bytes += gone[i]->rel_bytes, destroy_idle(gone[i]);
+    free(w), free(gone);
+}
+
 void sweep_released(void) {
     while (nreleased > RELEASED_MAX && rel_head) destroy_idle(rel_head);
     if (released_bytes <= released_cap()) return;
     for (Tex *e = rel_head, *next; e && released_bytes > released_cap(); e = next) {
         next = e->rel_next;
         if (recreatable(e)) destroy_idle(e);
+    }
+    // The search walks every entry: only once the kept ones grew 64 MiB since the last one (a release at a time
+    // otherwise, on the replay thread).
+    // MKW_TEX_OVERWRITTEN=0 (a measurement): kept as before, for comparing a run with and without.
+    static uint64_t searched_at;
+    static int on = -1;
+    if (on < 0) on = rt_knob("TEX_OVERWRITTEN", "1") != 0;
+    if (on && released_bytes > released_cap() && released_bytes >= searched_at + (64ull << 20)) {
+        uint64_t n0 = overwritten_n, b0 = overwritten_bytes;
+        drop_overwritten();
+        searched_at = released_bytes;
+        static int logs;            // the first 8, then at each GiB more in all (ab1: ~4 000 dropped in 7 minutes)
+        static uint64_t logged_gib;
+        if (overwritten_n > n0 && (logs++ < 8 || (overwritten_bytes >> 30) > logged_gib))
+            rt_log("vk: released textures written over by a later image: %llu dropped (%llu MiB), %llu in all (%llu MiB)",
+                   (unsigned long long)(overwritten_n - n0), (unsigned long long)((overwritten_bytes - b0) >> 20),
+                   (unsigned long long)overwritten_n, (unsigned long long)(overwritten_bytes >> 20)),
+            logged_gib = overwritten_bytes >> 30;
     }
     static uint64_t logged_at;   // what stays over the cap: released images the GPU wrote (render targets and such)
     if (released_bytes > released_cap() && released_bytes > logged_at + (256ull << 20)) {

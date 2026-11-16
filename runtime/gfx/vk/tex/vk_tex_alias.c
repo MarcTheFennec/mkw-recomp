@@ -201,6 +201,22 @@ int vk_texture_capture_state(const tex_t *t, uint32_t recent) {
     return r;
 }
 
+// e was written by the GPU in the submission being recorded (texture lock held): no re-upload from storage, and a
+// mirrored texture is written back to it (small ones at the fence, wb_at_fence)
+static void gpu_written_locked(Tex *e) {
+    make_fresh(e);   // a partial write keeps what the storage held before
+    e->pub.gpu_owned = 1;
+    uint64_t f = vk_exec_recording_fence();
+    if (f > e->wr_fence) e->wr_fence = f;
+    if (!e->pub.mirrored) return;
+    e->gpu_dirty = 1;
+    storage_rewritten(e, 0, &e->gpu_gen);   // CPU writes up to here are older than this one
+    e->gpu_seq = ++gpu_writes;
+    e->gpu_fence = f;
+    if (wb_at_fence(&e->t.d, e->t.L.size)) __atomic_store_n(&small_pending, 1, __ATOMIC_RELEASE);
+    own_add(e);
+}
+
 void vk_texture_gpu_written(const tex_t *t) {
     if (!t || !t->mem) return;
     if (tracing((uintptr_t)t->mem)) {   // with the replay function that wrote it (copies, clears, render targets)
@@ -212,20 +228,22 @@ void vk_texture_gpu_written(const tex_t *t) {
     vk_exec_frame_written(t);
     lock();
     Tex *e = entry_of(t);
-    if (e) {
-        make_fresh(e);   // a partial render keeps what the storage held before
-        e->pub.gpu_owned = 1;
-        uint64_t f = vk_exec_recording_fence();
-        if (f > e->wr_fence) e->wr_fence = f;
-        if (e->pub.mirrored) {
-            e->gpu_dirty = 1;
-            storage_rewritten(e, 0, &e->gpu_gen);   // CPU writes up to here are older than this render
-            e->gpu_seq = ++gpu_writes;
-            e->gpu_fence = vk_exec_recording_fence();
-            if (wb_at_fence(&e->t.d, e->t.L.size)) __atomic_store_n(&small_pending, 1, __ATOMIC_RELEASE);
-            own_add(e);
-        }
-    }
+    if (e) gpu_written_locked(e);
+    unlock();
+}
+
+void vk_texture_compute_written(int id) {
+    // A compute dispatch's storage-image store lands in the image only; the storage keeps what the CPU put there.
+    // The game's water collision height map (a 256x256 pitch-linear R16G16B16A16_SNORM texture Eglantine publishes to
+    // guest memory after its compute pass) is read back by the CPU for tricks and wave riding: without this mark the
+    // write-back paths (owned_dirty) never see it and physics reads a flat road while the GPU shows waves (#410).
+    // As vk_texture_gpu_written above, resolved by slot: the dispatch binds by handle, not by tex_t.
+    if (id < 0 || id >= (1 << 20)) return;
+    lock();
+    view_t v;
+    int hv = 0;
+    const VkTexImage *pub = vk_texture_by_id_locked(id, &v, &hv);
+    if (pub) gpu_written_locked((Tex *)pub);   // pub is Tex's first member
     unlock();
 }
 

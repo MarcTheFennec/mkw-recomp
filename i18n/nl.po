@@ -16,9 +16,10 @@ msgctxt "UI_MENU_TAB_SCREEN"
 msgid "Screen"
 msgstr "Scherm"
 
-msgctxt "UI_MENU_TAB_GAME"
-msgid "Game"
-msgstr "Spel"
+#. The settings tab with the game's and the menu's language, LAN play and the update check.
+msgctxt "UI_MENU_TAB_GENERAL"
+msgid "General"
+msgstr "Algemeen"
 
 msgctxt "UI_MENU_TAB_SOUND"
 msgid "Sound"
@@ -27,10 +28,6 @@ msgstr "Geluid"
 msgctxt "UI_MENU_TAB_CONTROLS"
 msgid "Controls"
 msgstr "Besturing"
-
-msgctxt "UI_MENU_TAB_MENU"
-msgid "Menu"
-msgstr "Menu"
 
 msgctxt "UI_MENU_TAB_ADVANCED"
 msgid "Advanced"
@@ -142,9 +139,33 @@ msgctxt "UI_MENU_QUICK_RACE_TT"
 msgid "Time trial"
 msgstr "Tijdrace"
 
+msgctxt "UI_MENU_QUICK_RACE_GP"
+msgid "Grand Prix"
+msgstr ""
+
 msgctxt "UI_MENU_QUICK_RACE_FREE"
 msgid "Free roam"
 msgstr "Rondrijden"
+
+msgctxt "UI_MENU_CLASSIC_GP"
+msgid "Classic Grand Prix"
+msgstr ""
+
+msgctxt "UI_MENU_CLASSIC_GP_DESC"
+msgid ""
+"Grand Prix races take place on each course instead of the road to it. Knockout Tour is unchanged. "
+"Changes take several seconds and affect races started afterward."
+msgstr ""
+
+msgctxt "UI_MENU_CLASSIC_VS"
+msgid "Classic VS races"
+msgstr ""
+
+msgctxt "UI_MENU_CLASSIC_VS_DESC"
+msgid ""
+"VS races after the first take place on the next course instead of the road to it, whatever the "
+"course rule. Changes take several seconds and affect races started afterward."
+msgstr ""
 
 msgctxt "UI_MENU_ANISO"
 msgid "Texture filtering"
@@ -418,12 +439,15 @@ msgstr "Framerate"
 
 msgctxt "UI_MENU_FPS_DESC"
 msgid ""
-"Frames per second the game aims for. Automatic is the console's: 60, or 30 when a frame takes too "
-"long. If your computer cannot hold 60, choose 30 so the race runs at its real speed."
+"Frames per second the game aims for. Automatic lowers it from 60 to 30, 20 or 15 when frames take "
+"too long, so the race always runs at its real speed. At 20 or 15, Frame generation can show the "
+"frames in between. 20 and 15 apply only in races: menus, movies and loading screens go at 30 at "
+"most, as on the console."
 msgstr ""
-"Beelden per seconde waar het spel naar streeft. Automatisch is die van de console: 60, of 30 als "
-"een beeld te lang duurt. Haalt je computer geen 60, kies dan 30 zodat de race op de echte "
-"snelheid loopt."
+"Beelden per seconde waar het spel naar streeft. Automatisch verlaagt dat van 60 naar 30, 20 of 15 "
+"als een beeld te lang duurt, zodat de race altijd op de echte snelheid loopt. Bij 20 of 15 kan "
+"Framegeneratie de tussenliggende beelden tonen. 20 en 15 gelden alleen in races: menu's, video's "
+"en laadschermen lopen op hoogstens 30, zoals op de console."
 
 msgctxt "UI_MENU_FPS_AUTO"
 msgid "Automatic"
@@ -435,13 +459,46 @@ msgstr "Framegeneratie"
 
 msgctxt "UI_MENU_FRAMEGEN_DESC"
 msgid ""
-"Shows frames made between the game's own: 2x turns 30 fps into 60. Automatic makes as many as "
-"your monitor's refresh rate has room for. Adds up to one frame of delay, and fast motion can "
+"Shows frames made between the game's own: 2x turns 30 fps into 60. Automatic makes only as many "
+"as divide your monitor's refresh rate evenly. Adds up to one frame of delay, and fast motion can "
 "smear. Not on the console."
 msgstr ""
-"Toont beelden die tussen die van het spel zelf worden gemaakt: 2x maakt van 30 fps 60. "
-"Automatisch maakt er zoveel als de vernieuwingsfrequentie van je monitor toelaat. Voegt tot één "
-"beeld vertraging toe en snelle beweging kan uitsmeren. Niet op de console."
+"Toont frames die tussen die van het spel worden gemaakt: 2x maakt van 30 fps 60. Automatisch "
+"maakt er alleen zoveel als de verversingssnelheid van je monitor gelijk verdelen. Tot één frame "
+"extra vertraging, en snelle beweging kan uitsmeren. De console doet dit niet."
+
+msgctxt "UI_MENU_FRAMEGEN_UNEVEN"
+msgid ""
+"At the game's frame rate now, this factor does not divide your screen's refresh rate evenly: "
+"motion judders. Automatic avoids it."
+msgstr ""
+"Bij de huidige framerate van het spel deelt deze factor de verversingssnelheid van je scherm niet "
+"gelijk: beweging hapert. Automatisch voorkomt dat."
+
+msgctxt "UI_MENU_VRR"
+msgid "Variable refresh screen"
+msgstr "Scherm met variabele verversing"
+
+msgctxt "UI_MENU_VRR_DESC"
+msgid ""
+"Turn on if your screen has FreeSync or G-Sync and it is enabled. Off, Automatic frame generation "
+"only makes the frames that divide the refresh rate evenly, so motion does not judder."
+msgstr ""
+"Zet aan als je scherm FreeSync of G-Sync heeft en het aanstaat. Uit: automatische framegeneratie "
+"maakt alleen frames die de verversingssnelheid gelijk verdelen, zodat beweging niet hapert."
+
+msgctxt "UI_MENU_LOW_LATENCY"
+msgid "Low latency"
+msgstr "Lage latentie"
+
+msgctxt "UI_MENU_LOW_LATENCY_DESC"
+msgid ""
+"Starts each frame as late as your computer allows, so what you press reaches the screen sooner. "
+"Matters most at 20 or 15 fps and with Frame generation. Turn it off if the picture stutters."
+msgstr ""
+"Start elk beeld zo laat als je computer toelaat, zodat wat je indrukt sneller op het scherm "
+"verschijnt. Het telt het zwaarst bij 20 of 15 fps en met Framegeneratie. Zet het uit als het "
+"beeld hapert."
 
 msgctxt "UI_MENU_GRAPHICS"
 msgid "Picture"
@@ -509,6 +566,45 @@ msgstr "FSR-scherpte"
 msgctxt "UI_MENU_SHARPNESS_DESC"
 msgid "Sharpening after FSR scaling; 0 turns it off."
 msgstr "Verscherping na FSR-schaling; 0 zet het uit."
+
+#. Under Sharpness, greyed out, when the upscaler is not AMD FSR 1.
+msgctxt "UI_MENU_SHARPNESS_FSR_ONLY"
+msgid "With AMD FSR 1 only"
+msgstr "Alleen met AMD FSR 1"
+
+#. Group heading on the Graphics tab: internal resolution and upscaling.
+msgctxt "UI_MENU_GROUP_RESOLUTION"
+msgid "Resolution"
+msgstr "Resolutie"
+
+#. Group heading on the Graphics tab: frame rate, frame generation, overlay.
+msgctxt "UI_MENU_GROUP_PERFORMANCE"
+msgid "Performance"
+msgstr "Prestaties"
+
+#. Graphics tab button: Auto-set.
+msgctxt "UI_MENU_AUTOSET"
+msgid "Best settings for this PC"
+msgstr "De beste instellingen voor deze pc"
+
+#. Description of Best settings for this PC.
+msgctxt "UI_MENU_AUTOSET_DESC"
+msgid ""
+"Picks the Quality preset, the internal resolution and AMD FSR 1 from your graphics card and "
+"screen. A first guess: change anything afterwards."
+msgstr ""
+"Kiest de kwaliteitsvoorinstelling, de interne resolutie en AMD FSR 1 op basis van je videokaart "
+"en scherm. Een eerste schatting: verander daarna wat je wilt."
+
+#. Puts back what Best settings for this PC changed.
+msgctxt "UI_MENU_AUTOSET_UNDO"
+msgid "Undo best settings"
+msgstr "Beste instellingen ongedaan maken"
+
+#. Description of Undo best settings.
+msgctxt "UI_MENU_AUTOSET_UNDO_DESC"
+msgid "Puts back the rows Best settings for this PC changed."
+msgstr "Zet de rijen terug die „De beste instellingen voor deze pc” heeft gewijzigd."
 
 msgctxt "UI_MENU_GAME_LANG"
 msgid "Game language"
@@ -2167,11 +2263,6 @@ msgstr ""
 "wordt mogelijk niet getoond of verstoort het beeld"
 
 #. printf format: keep every %... conversion, in the same order.
-msgctxt "UI_LAUNCH_UPDATE"
-msgid "Update to %s (%d MB)"
-msgstr "Bijwerken naar %s (%d MB)"
-
-#. printf format: keep every %... conversion, in the same order.
 msgctxt "UI_LAUNCH_UPDATE_FETCHING"
 msgid "Downloading %s"
 msgstr "%s downloaden"
@@ -2185,6 +2276,298 @@ msgstr "Bijwerken mislukt: %s"
 msgctxt "UI_LAUNCH_UPDATED"
 msgid "Updated to %s: setting up again what it changed"
 msgstr "Bijgewerkt naar %s: wat veranderd is wordt opnieuw ingesteld"
+
+#. The update card's title; %s is the release (v0.1.12).
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_LAUNCH_UPDATE_TITLE"
+msgid "Update available: %s"
+msgstr "Update beschikbaar: %s"
+
+#. Under it: %s the version in use, %d the download in MB.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_LAUNCH_UPDATE_DETAIL"
+msgid "You have %s · %d MB to download"
+msgstr "Je hebt %s · %d MB om te downloaden"
+
+#. The update card's button: downloads and installs it.
+msgctxt "UI_LAUNCH_UPDATE_NOW"
+msgid "Update"
+msgstr "Bijwerken"
+
+#. Opens the release's notes on GitHub.
+msgctxt "UI_LAUNCH_WHATS_NEW"
+msgid "What's new"
+msgstr "Wat is er nieuw"
+
+#. After a failed download.
+msgctxt "UI_LAUNCH_RETRY"
+msgid "Try again"
+msgstr "Opnieuw proberen"
+
+#. The game files' state with the game version the setup installed.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_LAUNCH_FILES_READY_AS"
+msgid "Game files ready (version %s)"
+msgstr "Spelbestanden klaar (versie %s)"
+
+#. Under Play: %s is the first controller's name.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_LAUNCH_PAD"
+msgid "Controller: %s"
+msgstr "Controller: %s"
+
+#. Under Play when no controller is connected.
+msgctxt "UI_LAUNCH_PAD_NONE"
+msgid "No controller connected"
+msgstr "Geen controller aangesloten"
+
+#. On the controller row: opens the Controls tab.
+msgctxt "UI_LAUNCH_CONFIGURE"
+msgid "Configure"
+msgstr "Installeren"
+
+#. Offered once on the start screen after the setup.
+msgctxt "UI_LAUNCH_SHORTCUT_ASK"
+msgid "Start the game from your desktop"
+msgstr "Speel vanaf je bureaublad"
+
+#. Makes the desktop shortcut.
+msgctxt "UI_LAUNCH_SHORTCUT_MAKE"
+msgid "Create shortcut"
+msgstr "Snelkoppeling maken"
+
+#. Puts the offer away; the button stays on the Game files page.
+msgctxt "UI_LAUNCH_NOT_NOW"
+msgid "Not now"
+msgstr "Nu niet"
+
+#. The keys, at the lower right of the start screen.
+msgctxt "UI_LAUNCH_KEYS"
+msgid "Enter or A: select · F11: fullscreen"
+msgstr "Enter of A: selecteren · F11: volledig scherm"
+
+#. Beside the Settings title on the start screen.
+msgctxt "UI_LAUNCH_SETTINGS_NOTE"
+msgid "Changes are saved and apply when you press Play"
+msgstr "Wijzigingen worden opgeslagen en gelden zodra je op Spelen drukt"
+
+#. Step 1 of the setup before the player picks their copy.
+msgctxt "UI_LAUNCH_NO_SOURCE"
+msgid "No copy chosen yet"
+msgstr "Je hebt nog geen kopie gekozen"
+
+#. Under Copy into the game folder.
+msgctxt "UI_LAUNCH_ROMFS_COPY_NOTE"
+msgid "Uses 23 GB more disk space; your copy can be deleted afterwards"
+msgstr "Gebruikt 23 GB extra schijfruimte; daarna kun je je kopie verwijderen"
+
+#. Under Use it where it is.
+msgctxt "UI_LAUNCH_ROMFS_LINK_NOTE"
+msgid "No extra disk space; your copy has to stay where it is"
+msgstr "Geen extra schijfruimte; je kopie moet blijven waar die staat"
+
+#. Under Set up: %s is the game folder.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_LAUNCH_INSTALLS_TO"
+msgid "Installs to %s"
+msgstr "Wordt geïnstalleerd in %s"
+
+#. What a setup installed: label.
+msgctxt "UI_LAUNCH_INFO_VERSION"
+msgid "Game version"
+msgstr "Spelversie"
+
+#. What a setup installed: label; the value is MKW Recomp and its version.
+msgctxt "UI_LAUNCH_INFO_PORT"
+msgid "Set up by"
+msgstr "Geïnstalleerd door"
+
+#. What a setup installed: label; the value says how it is kept.
+msgctxt "UI_LAUNCH_INFO_ROMFS"
+msgid "RomFS"
+msgstr "RomFS"
+
+#. How the RomFS is kept, after the setup.
+msgctxt "UI_LAUNCH_ROMFS_COPIED"
+msgid "Copied into the game folder"
+msgstr "Gekopieerd naar de spelmap"
+
+#. How the RomFS is kept, after the setup.
+msgctxt "UI_LAUNCH_ROMFS_LINKED"
+msgid "Used where it is"
+msgstr "Gebruikt waar het staat"
+
+#. Shows the game folder in the file manager.
+msgctxt "UI_LAUNCH_OPEN_FOLDER"
+msgid "Open folder"
+msgstr "Map openen"
+
+#. Under Set up again, folded on the Game files page once the game is set up.
+msgctxt "UI_LAUNCH_SETUP_AGAIN_HINT"
+msgid "After a game update, or when the game files look damaged. The steps already done are kept."
+msgstr ""
+"Na een spelupdate, of als de spelbestanden beschadigd lijken. Gemaakte stappen blijven behouden."
+
+#. The start screen's page with the saves, the shortcuts, the updates and reporting a problem.
+msgctxt "UI_LAUNCH_TOOLS"
+msgid "Tools"
+msgstr "Hulpmiddelen"
+
+#. Tools page heading.
+msgctxt "UI_TOOLS_SAVES"
+msgid "Saves"
+msgstr "Spelstanden"
+
+#. Tools page row.
+msgctxt "UI_TOOLS_BACKUP"
+msgid "Back up saves"
+msgstr "Spelstanden back-uppen"
+
+#. Under Back up saves: %s is the player's name.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_BACKUP_NOTE"
+msgid "A zip of %s's saves in the game folder's backups"
+msgstr "Een zip van de spelstanden van %s in de backups-map van het spel"
+
+#. After a backup: %s is the zip file.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_BACKUP_DONE"
+msgid "Saved: %s"
+msgstr "Opgeslagen: %s"
+
+#. Button of Back up saves.
+msgctxt "UI_TOOLS_BACKUP_BUTTON"
+msgid "Back up"
+msgstr "Back-up maken"
+
+#. Tools page row with the two folders' buttons.
+msgctxt "UI_TOOLS_SAVES_FOLDERS"
+msgid "Saves and backups"
+msgstr "Spelstanden en back-ups"
+
+#. Shows the player's saves folder.
+msgctxt "UI_TOOLS_OPEN_SAVES"
+msgid "Open saves"
+msgstr "Spelstanden openen"
+
+#. Shows the backups folder.
+msgctxt "UI_TOOLS_OPEN_BACKUPS"
+msgid "Open backups"
+msgstr "Back-ups openen"
+
+#. Tools page heading.
+msgctxt "UI_TOOLS_SHORTCUTS"
+msgid "Shortcuts"
+msgstr "Snelkoppelingen"
+
+#. Tools page row.
+msgctxt "UI_TOOLS_STEAM"
+msgid "Add to Steam"
+msgstr "Toevoegen aan Steam"
+
+#. Under Add to Steam.
+msgctxt "UI_TOOLS_STEAM_NOTE"
+msgid "As a non-Steam game, for Big Picture and the Steam Deck"
+msgstr "Als spel dat niet van Steam is, voor Big Picture en Steam Deck"
+
+#. Button of Add to Steam.
+msgctxt "UI_TOOLS_ADD"
+msgid "Add"
+msgstr "Toevoegen"
+
+#. After Add to Steam.
+msgctxt "UI_TOOLS_STEAM_DONE"
+msgid "Added to Steam"
+msgstr "Toegevoegd aan Steam"
+
+#. After Add to Steam while Steam runs.
+msgctxt "UI_TOOLS_STEAM_RESTART"
+msgid "Added: restart Steam to see it"
+msgstr "Toegevoegd: start Steam opnieuw om het te zien"
+
+#. Why Add to Steam failed.
+msgctxt "UI_TOOLS_STEAM_NONE"
+msgid "Steam is not installed for this user"
+msgstr "Steam is voor deze gebruiker niet geïnstalleerd"
+
+#. Tools page heading.
+msgctxt "UI_TOOLS_UPDATES"
+msgid "Updates"
+msgstr "Updates"
+
+#. The version in use: %s.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_VERSION"
+msgid "Version %s"
+msgstr "Versie %s"
+
+#. Looks for a new version.
+msgctxt "UI_TOOLS_CHECK"
+msgid "Check now"
+msgstr "Nu controleren"
+
+#. While the check runs.
+msgctxt "UI_TOOLS_CHECKING"
+msgid "Checking for a new version..."
+msgstr "Op zoek naar een nieuwe versie..."
+
+#. Tools page row: %s is the version before the last update.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_UNDO_ROW"
+msgid "Go back to %s"
+msgstr "Terug naar %s"
+
+#. Under Go back to.
+msgctxt "UI_TOOLS_UNDO_NOTE"
+msgid "The version before the last update; the launcher starts again"
+msgstr "De versie van vóór de laatste update; de launcher opent opnieuw"
+
+#. Button that puts back the version before the last update.
+msgctxt "UI_TOOLS_UNDO"
+msgid "Undo update"
+msgstr "Update ongedaan maken"
+
+#. Confirmation: %s is that version.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_UNDO_ASK"
+msgid "Go back to %s? The launcher starts again and sets up again what differs."
+msgstr "Terug naar %s? De launcher opent opnieuw en stelt wat veranderd is opnieuw in."
+
+#. Tools page heading.
+msgctxt "UI_TOOLS_PROBLEMS"
+msgid "Problems"
+msgstr "Problemen"
+
+#. Tools page row.
+msgctxt "UI_TOOLS_REPORT"
+msgid "Report a problem"
+msgstr "Probleem melden"
+
+#. Under Report a problem.
+msgctxt "UI_TOOLS_REPORT_NOTE"
+msgid "Copies your system's details and opens the bug report form, to paste them in"
+msgstr "Kopieert je systeemgegevens en opent het meldformulier om ze in te plakken"
+
+#. Button of Report a problem.
+msgctxt "UI_TOOLS_REPORT_BUTTON"
+msgid "Report"
+msgstr "Melden"
+
+#. After Report.
+msgctxt "UI_TOOLS_REPORT_COPIED"
+msgid "Your system's details are on the clipboard: paste them in the form"
+msgstr "Je systeemgegevens staan in het klembord: plak ze in het formulier"
+
+#. Tools page row with the log folder's button.
+msgctxt "UI_TOOLS_LOGS"
+msgid "Logs"
+msgstr "Logboeken"
+
+#. A Tools page action that did not work: %s says why.
+#. printf format: keep every %... conversion, in the same order.
+msgctxt "UI_TOOLS_FAILED"
+msgid "Failed: %s"
+msgstr "Mislukt: %s"
 
 msgctxt "UI_LAUNCH_NO_GAME_DATA"
 msgid "Your own copy of the game · No game data included"
@@ -2236,13 +2619,19 @@ msgstr ""
 "Vraagt bij het starten aan GitHub of er een nieuwere versie van de port is en biedt die aan op "
 "het startscherm (hooguit een paar seconden, offline niets)."
 
+msgctxt "UI_MENU_DISCORD"
+msgid "Discord status"
+msgstr ""
+
+msgctxt "UI_MENU_DISCORD_DESC"
+msgid ""
+"While the game runs, your Discord profile shows that you are playing, for how long, and whether "
+"you are racing or in the menus. Your Discord friends see it too."
+msgstr ""
+
 msgctxt "UI_LAUNCH_PLAYERS"
 msgid "Profiles"
 msgstr "Profielen"
-
-msgctxt "UI_LAUNCH_PLAYER"
-msgid "Profile: %s"
-msgstr "Profiel: %s"
 
 msgctxt "UI_PLAYER_NOTE"
 msgid ""

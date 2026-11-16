@@ -6,6 +6,9 @@
 // drift7). Copies split and resume rendering with LOAD, so they observe the just-recorded draw; the passes those splits
 // end copy no targets (the snapshots stand for them). MKW_DUMP_DRAWS_RECT=x,y,w,h copies only that rectangle of the
 // target, so the DRAW_CAP snapshots of a long run (the race's particles, ~120 draws) fit in INFLIGHT_CAP.
+// MKW_DUMP_DRAWS_SKIP=N: the run's first N draws are counted but not copied, to cover a pass of more than DRAW_CAP draws
+// in parts (#430: a split-screen view's main pass, ~800 draws). Each snapshot names its draw's index in the run and its
+// vs and fs, to tell which draw paints a given object.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +23,8 @@
 static int draw_lo = -1, draw_hi = -1; // MKW_DUMP_DRAWS=<from>-<to>: passes copied after every draw (-1: none)
 static uint32_t draw_rect[4];          // MKW_DUMP_DRAWS_RECT: x, y, w, h of the snapshots (w 0: the whole target)
 static int draw_n;                     // snapshots in the selected run
+static int draw_skip, draw_seen;       // MKW_DUMP_DRAWS_SKIP; draws of the run so far (copied or not)
+static _Thread_local uint64_t draw_vs_h, draw_fs_h;   // the selected draw's shaders, for its snapshot line
 static uint64_t draw_fs;               // or the pass that draws with this fragment shader (0: none)
 static int draw_run_on;                // latched through replay's splits of the selected pass
 static uint64_t draw_targets;          // targets of that pass, to stop at the next pass
@@ -32,9 +37,11 @@ void draws_init(void) {
     const char *dr = cfg_get("MKW_DUMP_DRAWS_RECT");
     if (dr && sscanf(dr, "%u,%u,%u,%u", &draw_rect[0], &draw_rect[1], &draw_rect[2], &draw_rect[3]) != 4) draw_rect[2] = 0;
     if (!draw_rect[3]) draw_rect[2] = 0;
+    const char *sk = cfg_get("MKW_DUMP_DRAWS_SKIP");
+    draw_skip = sk ? atoi(sk) : 0;
 }
 
-void draws_reset(void) { draw_n = draw_run_on = 0; }
+void draws_reset(void) { draw_n = draw_run_on = draw_seen = 0; }
 
 void draws_select(VkExec *ex, const VkPipeState *s, int pass) {
     draw_pending = 0;
@@ -43,7 +50,7 @@ void draws_select(VkExec *ex, const VkPipeState *s, int pass) {
         if (draw_fs && shader_hash(s->fs) == draw_fs) match = 1;
         if (match) draw_run_on = 1, draw_targets = targets_sig(ex);   // draw_n goes on: a later run must not reuse names
     }
-    if (draw_run_on && frame_now() == dump_frame) draw_pending = 1;
+    if (draw_run_on && frame_now() == dump_frame) draw_pending = 1, draw_vs_h = shader_hash(s->vs), draw_fs_h = shader_hash(s->fs);
 }
 
 const char *draws_pass_end(uint64_t sig, const char *skip) {
@@ -56,13 +63,15 @@ const char *draws_pass_end(uint64_t sig, const char *skip) {
 // are invalid and otherwise produce a plausible-looking but unchanged PNG.
 void vk_dump_draw_after(VkExec *ex) {
     plat_mutex_lock(&rec_lock);
-    if (!draw_pending || !draw_run_on || frame_now() != dump_frame || draw_n >= DRAW_CAP) {
+    int seen = draw_pending && draw_run_on && frame_now() == dump_frame ? draw_seen++ : -1;
+    if (seen < draw_skip || draw_n >= DRAW_CAP) {
         draw_pending = 0;
         plat_mutex_unlock(&rec_lock);
         return;
     }
     draw_pending = 0;
-    int n = draw_n++;
+    draw_n++;
+    int n = seen;
     plat_mutex_unlock(&rec_lock);
     int reopen;
     VkCommandBuffer cb = vk_exec_inline_begin(&reopen);
@@ -83,8 +92,8 @@ void vk_dump_draw_after(VkExec *ex) {
     const char *why = copy_region(ex, t->image, t->format, t->aspect, t->level, t->base_layer,
                                   (VkOffset3D){(int32_t)x, (int32_t)y, 0}, (VkExtent3D){w, h, 1}, w, h, 1, name);
     plat_mutex_lock(&rec_lock);
-    fprintf(passes_f, "    draw snapshot %s.png at %u,%u of %ux%u%s%s\n", name, x, y, t->width, t->height,
-            why ? " skipped: " : "", why ? why : "");
+    fprintf(passes_f, "    draw snapshot %s.png at %u,%u of %ux%u vs %016llx fs %016llx%s%s\n", name, x, y, t->width,
+            t->height, (unsigned long long)draw_vs_h, (unsigned long long)draw_fs_h, why ? " skipped: " : "", why ? why : "");
     plat_mutex_unlock(&rec_lock);
     vk_exec_inline_end(reopen);
 }

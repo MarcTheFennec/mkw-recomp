@@ -62,6 +62,9 @@ int gfx_window_monitor_size(int *w, int *h);   // pixels of the monitor the wind
 // The present mode the swapchain got, as a MKW_VK_PRESENT value ("fifo" when mailbox is missing); "" before the first
 // swapchain. Any thread.
 const char *gfx_window_present_mode(void);
+// (gfx/vk/device/vk_framegen.c) a fixed frame generation factor does not split the screen's refreshes evenly at the
+// game's rate now, without MKW_VRR: the menu's note
+int vk_fg_uneven(void);
 
 #ifdef __cplusplus
 }

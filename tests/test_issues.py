@@ -161,3 +161,21 @@ def test_behind_the_newest_two():
     assert not classify.behind("v0.1.11", rel)
     assert not classify.behind("unknown-version", rel)
     assert not classify.behind("from-source", rel)
+
+
+def test_newest_log_and_the_setup_warm_up():
+    warm = "[host] host save storage: D:\\mkw-recomp\\setup-work\\warm-profile/save/f755\n"
+    ipi = "vk: device fault: instruction pointer invalid\n"
+    # #425: the newest run is clean, an older mkw.N.log has #22's error: that error is not the report's
+    newest, older = classify.split_logs([("mkw.log", "race ok\n"), ("mkw.4.log", ipi)], setup=False)
+    assert [f[0] for f in newest] == ["mkw.log"] and [f[0] for f in older] == ["mkw.4.log"]
+    # #437: only the warm-up's mkw.log attached to a race crash: no run of the player's
+    newest, older = classify.split_logs([("mkw.log", warm)], setup=False)
+    assert newest == [] and older == [("mkw.log", warm)]
+    # a warm-up that crashed in the setup is the run the report describes
+    assert classify.split_logs([("mkw.log", warm + ipi)], setup=True)[0] == [("mkw.log", warm + ipi)]
+    # the warm-up's mkw.log skipped, the player's run in mkw.1.log is the newest
+    newest, _ = classify.split_logs([("mkw.log", warm), ("mkw.1.log", ipi), ("mkw.2.log", "")], setup=False)
+    assert newest == [("mkw.1.log", ipi)]
+    # renamed copies ("teste.geral.mkw.log") count as mkw.log
+    assert classify.log_age("teste.geral.mkw.log") == 0 and classify.log_age("mkw.3.log") == 3

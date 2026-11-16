@@ -44,10 +44,10 @@ O principal trabalho em aberto, em ordem; os detalhes estão em [docs/roadmap.md
 
 ## Desempenho
 
-Os tempos de quadro medidos, cada um com sua data, estão em [docs/performance.md](docs/performance.md). Para incluir a
+Os tempos de quadro medidos, cada um com a versão testada, estão em [docs/performance.md](docs/performance.md). Para incluir a
 sua máquina, abra um
 [relatório de desempenho](https://github.com/adriadam10/mkw-recomp/issues/new?template=performance.yml): ele entra na
-tabela com a data do relatório. Os tempos são os quadros do próprio jogo: a geração de quadros mostra mais quadros, mas
+tabela com a versão indicada. Os tempos são os quadros do próprio jogo: a geração de quadros mostra mais quadros, mas
 não os encurta. 16,7 ms são 60 fps; com Taxa de quadros em Automático (a do console) cai para 30 fps quando 60 não são
 alcançados, e um quadro acima de 33,3 ms faz a corrida rodar mais devagar que o tempo real.
 
